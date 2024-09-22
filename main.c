@@ -79,16 +79,22 @@ struct file_t
     size_t file_size;
     char*  buf;
 
-    /* Access time
+    /**
+     * Access time
      * Because this is a ramfs we will update this every time
      * the contents of buf are modified, read, or created
+     *
+     *
      *
      * see strictatime and relatime fs mount options for future ideas
      */
     struct timespec atime;
-    struct timespec mtime; /* last buf contents changed time*/
-    struct timespec ctime; /* last file_t metadata modification time */
-    struct timespec btime; /* file_t creation time (cannot be changed) */
+    /** Metadata Modification time (also includes non-zero calles to write) */
+    struct timespec ctime;
+    /** Content Modification time */
+    struct timespec mtime;
+    /** File_t creation time (should not be changed) */
+    struct timespec btime;
 
     uid_t uid;
     gid_t gid;
@@ -96,6 +102,47 @@ struct file_t
     mode_t  mode;
     nlink_t nlink;
 };
+
+/**
+ * Values that control which time fields will be updated by file_update_times
+ */
+enum file_time_update_level_t
+{
+    FILE_TIME_LEVEL_ACCESS          = 0,
+    FILE_TIME_LEVEL_MODIFY_METADATA = 1,
+    FILE_TIME_LEVEL_MODIFY_CONTENTS = 2,
+    FILE_TIME_LEVEL_CREATION        = 3,
+};
+
+/**
+ * Helper function to update appropriate file times
+ *
+ * Returns 1 on success and 0 on failure
+ */
+static int file_update_times(struct file_t* file, enum file_time_update_level_t level)
+{
+    struct timespec t;
+    if (clock_gettime(CLOCK_REALTIME, &t))
+        return 0;
+    switch (level)
+    {
+    case FILE_TIME_LEVEL_CREATION:
+        file->btime = t;
+        /* FALLTHRU */
+    case FILE_TIME_LEVEL_MODIFY_CONTENTS:
+        file->ctime = t;
+        /* FALLTHRU */
+    case FILE_TIME_LEVEL_MODIFY_METADATA:
+        file->mtime = t;
+        /* FALLTHRU */
+    case FILE_TIME_LEVEL_ACCESS:
+        file->atime = t;
+        break;
+    default:
+        return 0;
+    }
+    return 1;
+}
 
 /* Finds a file by recursing through the linked list, sets found_file and returns true if name found */
 int _find_file(size_t recur_level, const char* caller, const char* name, struct file_t* first_file, struct file_t** found_file)
@@ -209,12 +256,7 @@ int create_file(const char* name, struct file_t** file_ptr)
     }
     memcpy(file->name, name, name_len);
     file_resize_buf(__func__, file, 0);
-    struct timespec t;
-    clock_gettime(CLOCK_REALTIME, &t);
-    file->btime = t;
-    file->atime = t;
-    file->mtime = t;
-    file->ctime = t;
+    file_update_times(file, FILE_TIME_LEVEL_CREATION);
     file->uid   = getuid();
     file->gid   = getuid();
     file->mode  = S_IFREG | 0755;
@@ -267,6 +309,8 @@ static int ramfs_read(const char* path, char* buf, size_t size, off_t _offset, s
     if (file == NULL && !find_file(__func__, &path[1], _root_file, &file))
         return -ENOENT;
 
+    file_update_times(file, FILE_TIME_LEVEL_ACCESS);
+
     size_t offset = _offset;
     if (offset < file->file_size)
     {
@@ -312,6 +356,7 @@ static int ramfs_truncate(const char* path, off_t size, struct fuse_file_info* f
     {
         if (!file_resize_buf(__func__, file, size))
             return -ENOSPC;
+        file_update_times(file, FILE_TIME_LEVEL_MODIFY_CONTENTS);
         return 0;
     }
     else
@@ -334,6 +379,7 @@ static int ramfs_write(const char* path, const char* buf, size_t size, off_t off
         size_t msize = size + off;
         if (!file_resize_buf(__func__, file, msize))
             return -ENOSPC;
+        file_update_times(file, FILE_TIME_LEVEL_MODIFY_CONTENTS);
         memcpy(file->buf + off, buf, size);
         file->file_size = msize;
         return size;
