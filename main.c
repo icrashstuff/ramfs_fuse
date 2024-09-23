@@ -99,7 +99,11 @@ struct file_t
     uid_t uid;
     gid_t gid;
 
-    mode_t  mode;
+    mode_t mode;
+    /**
+     * Number of hard links to file, in the case of directories there is the . directory which increases the value to 1
+     * If nlink both hit 0, then delete (this will be important when and if hardlinks are implemented)
+     */
     nlink_t nlink;
 };
 
@@ -190,6 +194,29 @@ int append_file(struct file_t* first_file, struct file_t* new_file)
     return 1;
 }
 
+/**
+ * Removes a file from the a file_t linked list
+ * Returns 1 on success and 0 on failure
+ */
+int remove_file(struct file_t* file)
+{
+    if (file == NULL)
+        return 0;
+
+    if (file->next != NULL)
+        file->next->prev = file->prev;
+    if (file->prev != NULL)
+        file->prev->next = file->next;
+    file->next = NULL;
+    file->prev = NULL;
+
+    return 1;
+}
+
+/**
+ * Frees a file and all following file_t->next entries
+ * Returns 1 on success and 0 on failure
+ */
 int free_files(struct file_t* first_file)
 {
     if (first_file == NULL)
@@ -344,6 +371,25 @@ static int ramfs_mknod(const char* path, mode_t mode, dev_t rdev)
         return -EIO;
     }
     return 0;
+}
+
+static int ramfs_unlink(const char* path)
+{
+    printf("[%s]: Path: \"%s\"\n", __func__, path);
+    struct file_t* file       = NULL;
+    struct file_t* _root_file = fuse_get_context()->private_data;
+    if (strcmp(path, "/") == 0)
+        return -EISDIR;
+    else if (file != NULL || find_file(__func__, &path[1], _root_file, &file))
+    {
+        if (--file->nlink > 0)
+            return 0;
+        if (!remove_file(file) || !free_files(file))
+            return -EIO;
+        return 0;
+    }
+    else
+        return -ENOENT;
 }
 
 static int ramfs_truncate(const char* path, off_t size, struct fuse_file_info* fi)
@@ -513,6 +559,7 @@ static const struct fuse_operations ramfs_operations = {
     .open     = ramfs_open,
     .read     = ramfs_read,
     .mknod    = ramfs_mknod,
+    .unlink   = ramfs_unlink,
     .write    = ramfs_write,
     .truncate = ramfs_truncate,
     .getattr  = ramfs_getattr,
