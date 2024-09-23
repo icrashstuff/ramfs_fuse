@@ -259,11 +259,11 @@ int file_resize_buf(const char* caller, struct file_t* file, size_t req_size)
             return 0;
         file->buf_size = size;
         file->buf      = new_ptr;
-    }
-    if (file->file_size < size)
-    {
-        size_t diff = size - file->file_size;
-        memset(&file->buf[file->file_size], 0, diff);
+        if (file->file_size < size)
+        {
+            size_t diff = size - file->file_size;
+            memset(&file->buf[file->file_size], 0, diff);
+        }
     }
 
     file->file_size = req_size;
