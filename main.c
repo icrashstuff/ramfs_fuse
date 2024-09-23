@@ -333,7 +333,7 @@ static int ramfs_readdir(const char* path, void* buf, fuse_fill_dir_t filler, of
 {
     ANNOYING_PRINTF("[%s]: Path: \"%s\"\n", __func__, path);
 
-    if (strcmp(path, "/") != 0)
+    if (path == NULL || strcmp(path, "/") != 0)
         return -ENOENT;
 
     filler(buf, ".", NULL, 0, FUSE_FILL_DIR_DEFAULTS);
@@ -351,7 +351,7 @@ static int ramfs_readdir(const char* path, void* buf, fuse_fill_dir_t filler, of
 static int ramfs_open(const char* path, struct fuse_file_info* fi)
 {
     ANNOYING_PRINTF("[%s]: Path: \"%s\"\n", __func__, path);
-    if (strcmp(path, "/") == 0)
+    if (path != NULL && strcmp(path, "/") == 0)
         return -EISDIR;
 
     struct file_t* _root_file = fuse_get_context()->private_data;
@@ -364,7 +364,7 @@ static int ramfs_open(const char* path, struct fuse_file_info* fi)
 static int ramfs_read(const char* path, char* buf, size_t size, off_t _offset, struct fuse_file_info* fi)
 {
     printf("[%s]: Path: \"%s\"\n", __func__, path);
-    if (strcmp(path, "/") == 0)
+    if (path != NULL && strcmp(path, "/") == 0)
         return -EISDIR;
 
     struct file_t* file       = fi == NULL ? NULL : ((struct file_t*)fi->fh);
@@ -414,7 +414,7 @@ static int ramfs_unlink(const char* path)
     printf("[%s]: Path: \"%s\"\n", __func__, path);
     struct file_t* file       = NULL;
     struct file_t* _root_file = fuse_get_context()->private_data;
-    if (strcmp(path, "/") == 0)
+    if (path != NULL && strcmp(path, "/") == 0)
         return -EISDIR;
     else if (file != NULL || find_file(__func__, &path[1], _root_file, &file))
     {
@@ -476,7 +476,7 @@ static int ramfs_truncate(const char* path, off_t size, struct fuse_file_info* f
 {
     struct file_t* file       = fi == NULL ? NULL : ((struct file_t*)fi->fh);
     struct file_t* _root_file = fuse_get_context()->private_data;
-    if (strcmp(path, "/") == 0)
+    if (path != NULL && strcmp(path, "/") == 0)
         return -EISDIR;
     else if (file != NULL || find_file(__func__, &path[1], _root_file, &file))
     {
@@ -496,7 +496,7 @@ static int ramfs_write(const char* path, const char* buf, size_t size, off_t off
     struct file_t* file       = fi == NULL ? NULL : ((struct file_t*)fi->fh);
     struct file_t* _root_file = fuse_get_context()->private_data;
 
-    if (strcmp(path, "/") == 0)
+    if (path != NULL && strcmp(path, "/") == 0)
     {
         return -EISDIR;
     }
@@ -523,7 +523,7 @@ static int ramfs_getattr(const char* path, struct stat* st, struct fuse_file_inf
     struct file_t* _root_file = fuse_get_context()->private_data;
 
     memset(st, 0, sizeof(struct stat));
-    if (strcmp(path, "/") == 0)
+    if (path != NULL && strcmp(path, "/") == 0)
         file = _root_file;
     else if (file != NULL || find_file(__func__, &path[1], _root_file, &file))
         st->st_size = file->file_size;
@@ -550,7 +550,7 @@ static int ramfs_statx(const char* path, int flags, int mask, struct statx* stx,
     struct file_t* _root_file = fuse_get_context()->private_data;
 
     memset(stx, 0, sizeof(struct stat));
-    if (strcmp(path, "/") == 0)
+    if (path != NULL && strcmp(path, "/") == 0)
         file = _root_file;
     else if (file != NULL || find_file(__func__, &path[1], _root_file, &file))
     {
