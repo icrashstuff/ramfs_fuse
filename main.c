@@ -89,7 +89,7 @@ struct file_t
      * see strictatime and relatime fs mount options for future ideas
      */
     struct timespec atime;
-    /** Metadata Modification time (also includes non-zero calles to write) */
+    /** Metadata Modification time (also includes non-zero calls to write) */
     struct timespec ctime;
     /** Content Modification time */
     struct timespec mtime;
@@ -134,13 +134,14 @@ static int file_update_times(struct file_t* file, enum file_time_update_level_t 
         file->btime = t;
         /* FALLTHRU */
     case FILE_TIME_LEVEL_MODIFY_CONTENTS:
-        file->ctime = t;
-        /* FALLTHRU */
-    case FILE_TIME_LEVEL_MODIFY_METADATA:
         file->mtime = t;
+        file->ctime = t; /* Contents being modified counts as a metadata change, I think */
         /* FALLTHRU */
     case FILE_TIME_LEVEL_ACCESS:
         file->atime = t;
+        break;
+    case FILE_TIME_LEVEL_MODIFY_METADATA:
+        file->ctime = t;
         break;
     default:
         return 0;
@@ -423,6 +424,8 @@ static int ramfs_write(const char* path, const char* buf, size_t size, off_t off
     else if (file != NULL || find_file(__func__, &path[1], _root_file, &file))
     {
         size_t msize = size + off;
+        if (size == 0)
+            return 0;
         if (!file_resize_buf(__func__, file, msize))
             return -ENOSPC;
         file_update_times(file, FILE_TIME_LEVEL_MODIFY_CONTENTS);
