@@ -71,7 +71,9 @@
 
 struct file_t
 {
-    char*          name;
+    char*  name;
+    size_t name_buf_size;
+
     struct file_t* prev;
     struct file_t* next;
 
@@ -268,6 +270,45 @@ int file_resize_buf(const char* caller, struct file_t* file, size_t req_size)
     return 1;
 }
 
+/**
+ * Renames a file, does not check to see if this causes a conflict.
+ *
+ * Returns 1 on success and 0 on failure
+ */
+int file_rename(struct file_t* file, const char* new_name)
+{
+    if (file == NULL)
+        return 0;
+    size_t old_name_len = 0;
+    size_t new_name_len = strlen(new_name);
+    if (file->name != NULL)
+        old_name_len = file->name_buf_size;
+
+    if (new_name_len == 0)
+    {
+        FREE(file->name);
+        file->name_buf_size = 0;
+        return 1;
+    }
+    else if (old_name_len < new_name_len)
+    {
+        char* new_name_buf = calloc(new_name_len, sizeof(char));
+        char* old_name_buf = file->name;
+        if (new_name_buf == NULL)
+            return 0;
+        memcpy(new_name_buf, new_name, new_name_len);
+        file->name = new_name_buf;
+        FREE(old_name_buf);
+        return 1;
+    }
+    else if (new_name_len < old_name_len)
+    {
+        memcpy(file->name, new_name, new_name_len);
+        return 1;
+    }
+    return 0;
+}
+
 int create_file(const char* name, struct file_t** file_ptr)
 {
     if (file_ptr == NULL)
@@ -275,14 +316,8 @@ int create_file(const char* name, struct file_t** file_ptr)
     struct file_t* file = calloc(1, sizeof(struct file_t));
     if (file == NULL)
         return 0;
-    size_t name_len = strlen(name) + 1;
-    file->name      = calloc(name_len, sizeof(char));
-    if (file->name == NULL)
-    {
-        FREE(file);
+    if (!file_rename(file, name))
         return 0;
-    }
-    memcpy(file->name, name, name_len);
     file_resize_buf(__func__, file, 0);
     file_update_times(file, FILE_TIME_LEVEL_CREATION);
     file->uid   = getuid();
@@ -391,6 +426,50 @@ static int ramfs_unlink(const char* path)
     }
     else
         return -ENOENT;
+}
+
+static int ramfs_rename(const char* oldpath, const char* newpath, unsigned int flags)
+{
+    printf("[%s]: \"%s\"->\"%s\"\n", __func__, oldpath, newpath);
+    struct file_t* old_file   = NULL;
+    struct file_t* new_file   = NULL;
+    struct file_t* _root_file = fuse_get_context()->private_data;
+
+    if ((flags & RENAME_EXCHANGE && flags & RENAME_NOREPLACE) || flags & RENAME_WHITEOUT)
+        return -EINVAL;
+    if (strcmp(oldpath, "/") == 0)
+        return -EACCES;
+
+    if (!find_file(__func__, &oldpath[1], _root_file, &old_file))
+        return -ENOENT;
+    find_file(__func__, &newpath[1], _root_file, &new_file);
+
+    if (flags & RENAME_NOREPLACE && new_file != NULL)
+    {
+        if (new_file != NULL)
+            return -EEXIST;
+        if (!file_rename(old_file, &newpath[1]))
+            return -ENOMEM;
+    }
+    else if (flags & RENAME_EXCHANGE)
+    {
+        if (new_file == NULL)
+            return -ENOENT;
+        char* oldname  = old_file->name;
+        old_file->name = new_file->name;
+        new_file->name = oldname;
+        file_update_times(new_file, FILE_TIME_LEVEL_MODIFY_METADATA);
+    }
+    else
+    {
+        if (!file_rename(old_file, &newpath[1]))
+            return -ENOMEM;
+        if (new_file != NULL)
+            if (remove_file(new_file))
+                free_files(new_file);
+    }
+    file_update_times(old_file, FILE_TIME_LEVEL_MODIFY_METADATA);
+    return 0;
 }
 
 static int ramfs_truncate(const char* path, off_t size, struct fuse_file_info* fi)
@@ -563,6 +642,7 @@ static const struct fuse_operations ramfs_operations = {
     .read     = ramfs_read,
     .mknod    = ramfs_mknod,
     .unlink   = ramfs_unlink,
+    .rename   = ramfs_rename,
     .write    = ramfs_write,
     .truncate = ramfs_truncate,
     .getattr  = ramfs_getattr,
