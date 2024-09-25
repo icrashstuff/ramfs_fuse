@@ -255,6 +255,8 @@ int file_resize_buf(const char* caller, struct file_t* file, size_t req_size)
     if (size == 0)
     {
         FREE(file->buf);
+        file->buf_size  = 0;
+        file->file_size = 0;
         return 1;
     }
 
@@ -369,6 +371,7 @@ static int ramfs_readdir(const char* path, void* buf, fuse_fill_dir_t filler, of
     return 0;
 }
 
+static int ramfs_truncate(const char* path, off_t size, struct fuse_file_info* fi);
 static int ramfs_open(const char* path, struct fuse_file_info* fi)
 {
     ANNOYING_PRINTF("[%s]: Path: \"%s\"\n", __func__, path);
@@ -379,7 +382,12 @@ static int ramfs_open(const char* path, struct fuse_file_info* fi)
     if (find_file(__func__, &path[1], _root_file, (struct file_t**)&fi->fh))
         ((struct file_t*)fi->fh)->nrefs++;
     else
+    {
         fi->fh = 0;
+        return -ENOENT;
+    }
+    if ((fi->flags) & O_TRUNC)
+        ramfs_truncate(path, 0, fi);
 
     return 0;
 }
@@ -398,7 +406,7 @@ static int ramfs_read(const char* path, char* buf, size_t size, off_t _offset, s
     file_update_times(file, FILE_TIME_LEVEL_ACCESS);
 
     size_t offset = _offset;
-    if (offset < file->file_size)
+    if (offset < file->file_size && file->buf != NULL)
     {
         if (offset + size > file->file_size)
             size = file->file_size - offset;
