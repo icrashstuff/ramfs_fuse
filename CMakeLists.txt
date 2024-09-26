@@ -31,10 +31,10 @@ include_directories(${FUSE3_INCLUDE_DIRS})
 
 add_executable(ramfs_fuse main.c)
 
-target_compile_definitions(ramfs_fuse PRIVATE _DEFAULT_SOURCE )
+target_compile_definitions(ramfs_fuse PRIVATE _DEFAULT_SOURCE _GNU_SOURCE)
 set(ENABLE_STATX OFF CACHE BOOL "Enables response to statx(2) (Requires libfuse to support statx)")
 if(${ENABLE_STATX})
-    target_compile_definitions(ramfs_fuse PRIVATE ENABLE_STATX _GNU_SOURCE)
+    target_compile_definitions(ramfs_fuse PRIVATE ENABLE_STATX)
 endif()
 target_link_libraries(ramfs_fuse ${FUSE3_LIBRARIES})
 target_compile_options(ramfs_fuse PUBLIC ${FUSE3_CFLAGS_OTHER})
