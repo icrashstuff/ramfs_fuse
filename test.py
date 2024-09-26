@@ -138,6 +138,7 @@ def do_test(function, function_suffix, *args) -> bool:
         if (e == KeyboardInterrupt):
             raise e
         logger.exception("Exception occured while running \"%s\"" % name)
+        raise e
         return False
 
 
@@ -167,7 +168,7 @@ if __name__ == "__main__":
 
     fname_charset = string.ascii_letters + \
         string.digits + string.punctuation.replace("/", "")
-    fnames = ["ram/hello"]
+    fnames = [os.path.join(sys.argv[1], "hello")]
     for i in range(4):
         fname = os.path.join(sys.argv[1], "".join(seeded_random.choices(
             fname_charset, k=seeded_random.randrange(3, 16))))
