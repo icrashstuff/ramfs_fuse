@@ -565,6 +565,54 @@ static int ramfs_write(const char* path, const char* buf, size_t size, off_t off
         return -ENOENT;
 }
 
+static int ramfs_symlink(const char* target, const char* linkname)
+{
+    printf("[%s]: Paths: \"%s\"->\"%s\"\n", __func__, linkname, target);
+    int ret = ramfs_mknod(linkname, 0, 0);
+    if (ret != 0)
+        return ret;
+
+    struct file_t* file       = NULL;
+    struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
+    if (find_file(__func__, &linkname[1], _root_file, &file))
+    {
+        file->mode -= S_IFREG;
+        file->mode |= S_IFLNK;
+        struct fuse_file_info fi;
+        memset(&fi, 0, sizeof(struct fuse_file_info));
+        fi.fh = (uint64_t)file;
+        ramfs_write(linkname, target, strlen(target), 0, &fi);
+        printf("%zu\n", file->file_size);
+        printf("%s\n", file->buf);
+        return 0;
+    }
+    return -EIO;
+}
+
+static int ramfs_readlink(const char* path, char* buf, size_t buf_size)
+{
+    printf("[%s]: Path: \"%s\", buf_size: %zu\n", __func__, path, buf_size);
+    struct file_t* file       = NULL;
+    struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
+    if (!find_file(__func__, &path[1], _root_file, &file))
+        return -ENOENT;
+    if (!(file->mode & S_IFLNK))
+        return -EINVAL;
+
+    if (file->buf != NULL)
+    {
+        file_update_times(file, FILE_TIME_LEVEL_ACCESS);
+        size_t size = file->file_size;
+        if ((buf_size - 1) < size)
+            size = buf_size - 1;
+        memcpy(buf, file->buf, size);
+        buf[size] = 0;
+        return 0;
+    }
+    else
+        return -EIO;
+}
+
 static int ramfs_getattr(const char* path, struct stat* st, struct fuse_file_info* fi)
 {
     ANNOYING_PRINTF("[%s]: Path: \"%s\"\n", __func__, path);
@@ -710,6 +758,8 @@ static const struct fuse_operations ramfs_operations = {
     .rename   = ramfs_rename,
     .write    = ramfs_write,
     .truncate = ramfs_truncate,
+    .symlink  = ramfs_symlink,
+    .readlink = ramfs_readlink,
     .getattr  = ramfs_getattr,
 /* As of 2024-09-21 libfuse statx support only exists in an yet to be merged github fork */
 #ifdef ENABLE_STATX

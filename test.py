@@ -1,18 +1,18 @@
 #!/bin/env python3
 # SPDX-License-Identifier: MIT
-# 
+#
 # SPDX-FileCopyrightText: Copyright (c) 2024 Ian Hangartner <icrashstuff at outlook dot com>
-# 
+#
 # Permission is hereby granted, free of charge, to any person obtaining a
 # copy of this software and associated documentation files (the "Software"),
 # to deal in the Software without restriction, including without limitation
 # the rights to use, copy, modify, merge, publish, distribute, sublicense,
 # and/or sell copies of the Software, and to permit persons to whom the
 # Software is furnished to do so, subject to the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be included in
 # all copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -30,7 +30,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def write_test_buf(fname: str, test_buf: bytes):
+def write_test_buf(fname: str, test_buf: bytes = random.randbytes(random.randrange(0, 64))):
     with open(fname, "wb") as fd:
         fd.write(test_buf)
         fd.flush()
@@ -39,6 +39,13 @@ def write_test_buf(fname: str, test_buf: bytes):
 def check_test_buf(fname: str, test_buf: bytes) -> bool:
     with open(fname, "rb") as fd:
         return (fd.read() == test_buf)
+
+
+def remove_test_file(fname: str):
+    try:
+        os.remove(fname)
+    except FileNotFoundError:
+        pass
 
 
 def test_writing_file_no_remove(fname: str, num_bytes: int):
@@ -79,6 +86,41 @@ def test_writing_twice_to_file(fname: str, test_buf: bytes) -> bool:
     else:
         os.remove(fname)
         return False
+
+
+def test_symlink_create(fname: str, target: str) -> bool:
+    remove_test_file(fname)
+    try:
+        os.symlink(target, fname)
+        link_text = os.readlink(fname)
+        ret = (target == link_text)
+        remove_test_file(fname)
+        return ret
+    except Exception as e:
+        remove_test_file(fname)
+        raise e
+
+
+def test_symlink_create_invalid(fname: str):
+    write_test_buf(fname)
+    try:
+        os.symlink(fname, fname)
+    except OSError as e:
+        if (e.errno == 17):
+            remove_test_file(fname)
+            return True
+    remove_test_file(fname)
+    return False
+
+
+def test_symlink_read_non_link(fname: str):
+    write_test_buf(fname)
+    try:
+        os.readlink(fname)
+    except OSError as e:
+        if (e.errno == 22):
+            return True
+    return False
 
 
 def do_test(function, function_suffix, *args) -> bool:
@@ -141,6 +183,15 @@ if __name__ == "__main__":
                          fname, seeded_random.randbytes(16)])
         test_list.append([test_writing_twice_to_file, None,
                          fname, seeded_random.randbytes(16)])
+
+        for i in range(8):
+            num = seeded_random.randrange(int(pow(2, i)), int(pow(2, i+1)))
+            target = "".join(seeded_random.choices(fname_charset, k=num))
+            test_list.append([test_symlink_create, "_%d" % num, fname, target])
+
+        test_list.append([test_symlink_read_non_link, None, fname])
+        test_list.append([test_symlink_create_invalid, None, fname])
+
         for j in (test_writing_file_no_remove, test_writing_file):
             for k in range(24):
                 num1 = int(pow(2, k-1))
@@ -172,7 +223,4 @@ if __name__ == "__main__":
     logger.info("Random seed %d" % random_seed)
 
     for i in fnames:
-        try:
-            os.remove(i)
-        except:
-            pass
+        remove_test_file(i)
