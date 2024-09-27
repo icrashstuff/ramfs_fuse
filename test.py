@@ -123,6 +123,29 @@ def test_symlink_read_non_link(fname: str):
     return False
 
 
+def test_rename(fname1: str, fname2: str, sizes: (int, int) = (64, 128)):
+    buf1 = random.randbytes(sizes[0])
+    buf2 = random.randbytes(sizes[1])
+    write_test_buf(fname1, buf1)
+    write_test_buf(fname2, buf2)
+    os.rename(fname1, fname2)
+    if (not check_test_buf(fname2, buf1)):
+        logger.info("check_test_buf(fname2, buf1) failure")
+        return False
+    return True
+
+
+# This shouldn't ever fail
+def test_rename_self(fname1: str, num_bytes: int = 64):
+    buf1 = random.randbytes(num_bytes)
+    write_test_buf(fname1, buf1)
+    os.rename(fname1, fname1)
+    if (not check_test_buf(fname2, buf1)):
+        logger.info("check_test_buf(fname2, buf1) failure")
+        return False
+    return True
+
+
 def do_test(function, function_suffix, *args) -> bool:
     name = function.__name__
     if (type(function_suffix) == str):
@@ -168,60 +191,74 @@ if __name__ == "__main__":
 
     fname_charset = string.ascii_letters + \
         string.digits + string.punctuation.replace("/", "")
-    fnames = [os.path.join(sys.argv[1], "hello")]
+
+    fnames1 = [os.path.join(sys.argv[1], "hello")]
+    fnames2 = []
     for i in range(4):
-        fname = os.path.join(sys.argv[1], "".join(seeded_random.choices(
+        fname1 = os.path.join(sys.argv[1], "".join(seeded_random.choices(
             fname_charset, k=seeded_random.randrange(3, 16))))
-        fnames.append(fname)
-    for i in fnames:
+        fnames1.append(fname1)
+    for i in fnames1:
+        fnames2.append(i + "_2")
+    for i in [*fnames1, *fnames2]:
         if (os.path.exists(i)):
             logger.critical("File \"%s\" already exists" % i)
             sys.exit(1)
 
     test_list = []
-    for fname in fnames:
+    for _i in range(len(fnames1)):
+        fname1 = fnames1[_i]
+        fname2 = fnames2[_i]
         test_list.append([test_unlinking_while_open, None,
-                         fname, seeded_random.randbytes(16)])
+                         fname1, seeded_random.randbytes(16)])
         test_list.append([test_writing_twice_to_file, None,
-                         fname, seeded_random.randbytes(16)])
+                         fname1, seeded_random.randbytes(16)])
 
         for i in range(8):
             num = seeded_random.randrange(int(pow(2, i)), int(pow(2, i+1)))
             target = "".join(seeded_random.choices(fname_charset, k=num))
-            test_list.append([test_symlink_create, "_%d" % num, fname, target])
+            test_list.append([test_symlink_create, "_%d" %
+                             num, fname1, target])
 
-        test_list.append([test_symlink_read_non_link, None, fname])
-        test_list.append([test_symlink_create_invalid, None, fname])
+        test_list.append([test_symlink_read_non_link, None, fname1])
+        test_list.append([test_symlink_create_invalid, None, fname1])
+
+        test_list.append([test_rename, None, fname1, fname2])
+        test_list.append([test_rename_self, None, fname1])
 
         for j in (test_writing_file_no_remove, test_writing_file):
             for k in range(24):
                 num1 = int(pow(2, k-1))
                 num2 = seeded_random.randrange(num1, int(pow(2, k)))
-                test_list.append([j, "_%d" % num1, fname, num1])
-                test_list.append([j, "_%d" % num2, fname, num2])
+                test_list.append([j, "_%d" % num1, fname1, num1])
+                test_list.append([j, "_%d" % num2, fname1, num2])
 
-    logger.info("Running test_list in input sequence")
-    standard_seq_results = do_test_list(test_list)
-    reversed(test_list)
-    logger.info("Running test_list in reversed sequence")
-    reversed_seq_results = do_test_list(test_list)
-    seeded_random.shuffle(test_list)
-    logger.info("Running test_list in randomized sequence 1")
-    random_seq_results_1 = do_test_list(test_list)
-    seeded_random.shuffle(test_list)
-    logger.info("Running test_list in randomized sequence 2")
-    random_seq_results_2 = do_test_list(test_list)
+    try:
+        logger.info("Running test_list in input sequence")
+        standard_seq_results = do_test_list(test_list)
+        reversed(test_list)
+        logger.info("Running test_list in reversed sequence")
+        reversed_seq_results = do_test_list(test_list)
+        seeded_random.shuffle(test_list)
+        logger.info("Running test_list in randomized sequence 1")
+        random_seq_results_1 = do_test_list(test_list)
+        seeded_random.shuffle(test_list)
+        logger.info("Running test_list in randomized sequence 2")
+        random_seq_results_2 = do_test_list(test_list)
 
-    logger.info("standard_seq_results: %d/%d" %
-                (standard_seq_results[1], standard_seq_results[0]))
-    logger.info("reversed_seq_results: %d/%d" %
-                (reversed_seq_results[1], reversed_seq_results[0]))
-    logger.info("random_seq_results_1: %d/%d" %
-                (random_seq_results_1[1], random_seq_results_1[0]))
-    logger.info("random_seq_results_1: %d/%d" %
-                (random_seq_results_1[1], random_seq_results_1[0]))
+        logger.info("standard_seq_results: %d/%d" %
+                    (standard_seq_results[1], standard_seq_results[0]))
+        logger.info("reversed_seq_results: %d/%d" %
+                    (reversed_seq_results[1], reversed_seq_results[0]))
+        logger.info("random_seq_results_1: %d/%d" %
+                    (random_seq_results_1[1], random_seq_results_1[0]))
+        logger.info("random_seq_results_1: %d/%d" %
+                    (random_seq_results_1[1], random_seq_results_1[0]))
 
-    logger.info("Random seed %d" % random_seed)
-
-    for i in fnames:
+        logger.info("Random seed %d" % random_seed)
+    except Exception as e:
+        for i in [*fnames1, *fnames2]:
+            remove_test_file(i)
+        raise e
+    for i in [*fnames1, *fnames2]:
         remove_test_file(i)
