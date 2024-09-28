@@ -125,6 +125,17 @@ def test_symlink_read_non_link(fname: str):
 
 def test_rename(fname1: str, fname2: str, sizes: (int, int) = (64, 128)):
     buf1 = random.randbytes(sizes[0])
+    write_test_buf(fname1, buf1)
+    remove_test_file(fname2)
+    os.rename(fname1, fname2)
+    if (not check_test_buf(fname2, buf1)):
+        logger.info("check_test_buf(fname2, buf1) failure")
+        return False
+    return True
+
+
+def test_rename_overwrite(fname1: str, fname2: str, sizes: (int, int) = (64, 128)):
+    buf1 = random.randbytes(sizes[0])
     buf2 = random.randbytes(sizes[1])
     write_test_buf(fname1, buf1)
     write_test_buf(fname2, buf2)
@@ -140,7 +151,7 @@ def test_rename_self(fname1: str, num_bytes: int = 64):
     buf1 = random.randbytes(num_bytes)
     write_test_buf(fname1, buf1)
     os.rename(fname1, fname1)
-    if (not check_test_buf(fname2, buf1)):
+    if (not check_test_buf(fname1, buf1)):
         logger.info("check_test_buf(fname2, buf1) failure")
         return False
     return True
@@ -209,6 +220,7 @@ if __name__ == "__main__":
     for _i in range(len(fnames1)):
         fname1 = fnames1[_i]
         fname2 = fnames2[_i]
+        logger.info("fnames[%d]: (\"%s\", \"%s\")" % (_i, fname1, fname2))
         test_list.append([test_unlinking_while_open, None,
                          fname1, seeded_random.randbytes(16)])
         test_list.append([test_writing_twice_to_file, None,
@@ -224,6 +236,7 @@ if __name__ == "__main__":
         test_list.append([test_symlink_create_invalid, None, fname1])
 
         test_list.append([test_rename, None, fname1, fname2])
+        test_list.append([test_rename_overwrite, None, fname1, fname2])
         test_list.append([test_rename_self, None, fname1])
 
         for j in (test_writing_file_no_remove, test_writing_file):
