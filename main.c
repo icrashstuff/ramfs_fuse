@@ -334,7 +334,7 @@ int create_file(const char* name, struct file_t** file_ptr)
     file_update_times(file, FILE_TIME_LEVEL_CREATION);
     file->uid   = getuid();
     file->gid   = getuid();
-    file->mode  = S_IFREG | 0755;
+    file->mode  = S_IFREG | 0644;
     file->nlink = 1;
 
     *file_ptr = file;
