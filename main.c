@@ -584,6 +584,14 @@ static int ramfs_release(const char* path, struct fuse_file_info* fi)
     return 0;
 }
 
+#define SWAP_VAR(TYPE, VAR1, VAR2) \
+    do                             \
+    {                              \
+        TYPE SWAP_TMP = VAR1;      \
+        VAR1          = VAR2;      \
+        VAR2          = SWAP_TMP;  \
+    } while (0)
+
 static int ramfs_rename(const char* oldpath, const char* newpath, unsigned int flags)
 {
     printf("[%s]: \"%s\"->\"%s\"\n", __func__, oldpath, newpath);
@@ -628,6 +636,9 @@ static int ramfs_rename(const char* oldpath, const char* newpath, unsigned int f
     {
         if (new_file == NULL)
             return -ENOENT;
+
+        SWAP_VAR(char*, old_file->name, new_file->name);
+        SWAP_VAR(size_t, old_file->name_buf_size, new_file->name_buf_size);
 
         file_update_times(new_file, FILE_TIME_LEVEL_MODIFY_METADATA);
     }
