@@ -20,6 +20,8 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
+#
+# Formatted with `autopep8`
 import os
 import sys
 import time
@@ -157,6 +159,18 @@ def test_rename_self(fname1: str, num_bytes: int = 64):
     return True
 
 
+def test_unlink_simple(fname1: str, num_bytes: int = 64):
+    buf1 = random.randbytes(num_bytes)
+    write_test_buf(fname1, buf1)
+    os.remove(fname1)
+    try:
+        if (check_test_buf(fname1, buf1)):
+            logger.info("check_test_buf(fname2, buf1) failure")
+        return False
+    except FileNotFoundError:
+        return True
+
+
 def do_test(function, function_suffix, *args) -> bool:
     name = function.__name__
     if (type(function_suffix) == str):
@@ -204,7 +218,11 @@ if __name__ == "__main__":
         string.digits + string.punctuation.replace("/", "")
 
     fnames1 = [os.path.join(sys.argv[1], "hello")]
+    fnames1.append(os.path.join(sys.argv[1], "dir_0x0000/hello2"))
+    fnames1.append(os.path.join(
+        sys.argv[1], "dir_0x0000/dir_0x0001/dir_0x0002/hello3"))
     fnames2 = []
+
     for i in range(4):
         fname1 = os.path.join(sys.argv[1], "".join(seeded_random.choices(
             fname_charset, k=seeded_random.randrange(3, 16))))
@@ -221,6 +239,7 @@ if __name__ == "__main__":
         fname1 = fnames1[_i]
         fname2 = fnames2[_i]
         logger.info("fnames[%d]: (\"%s\", \"%s\")" % (_i, fname1, fname2))
+        test_list.append([test_unlink_simple, None, fname1])
         test_list.append([test_unlinking_while_open, None,
                          fname1, seeded_random.randbytes(16)])
         test_list.append([test_writing_twice_to_file, None,
@@ -245,6 +264,21 @@ if __name__ == "__main__":
                 num2 = seeded_random.randrange(num1, int(pow(2, k)))
                 test_list.append([j, "_%d" % num1, fname1, num1])
                 test_list.append([j, "_%d" % num2, fname1, num2])
+
+    try:
+        os.mkdir(os.path.join(sys.argv[1], "dir_0x0000"))
+    except FileExistsError:
+        pass
+
+    try:
+        os.mkdir(os.path.join(sys.argv[1], "dir_0x0000/dir_0x0001"))
+    except FileExistsError:
+        pass
+
+    try:
+        os.mkdir(os.path.join(sys.argv[1], "dir_0x0000/dir_0x0001/dir_0x0002"))
+    except FileExistsError:
+        pass
 
     try:
         logger.info("Running test_list in input sequence")

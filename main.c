@@ -74,6 +74,8 @@ struct file_t
     char*  name;
     size_t name_buf_size;
 
+    struct file_t* parent;
+    struct file_t* child;
     struct file_t* prev;
     struct file_t* next;
 
@@ -162,36 +164,53 @@ static int file_update_times(struct file_t* file, enum file_time_update_level_t 
 }
 
 /* Finds a file by recursing through the linked list, sets found_file and returns true if name found */
-int _find_file(size_t recur_level, const char* caller, const char* name, struct file_t* first_file, struct file_t** found_file)
+int _find_file(size_t recur_level, const char* caller, const char* name, size_t name_len, struct file_t* first_file, struct file_t** found_file)
 {
     if (first_file == NULL || name == NULL || found_file == NULL || strlen(name) == 0)
         return 0;
-    if (first_file->name != NULL && strcmp(first_file->name, name) == 0)
+    if (first_file->name != NULL && strncmp(first_file->name, name, name_len) == 0 && first_file->name[name_len] == '\0')
     {
-        ANNOYING_PRINTF("[%s][%s]: found file \"%s\", level: %zu\n", caller, __func__, name, recur_level);
+        printf("[%s][%s]: found file \"%.*s\", level: %zu\n", caller, __func__, (int)name_len, name, recur_level);
         *found_file = first_file;
         return 1;
     }
+    if (first_file->child != NULL)
+    {
+        int ret = _find_file(recur_level + 1, caller, name, name_len, first_file->child, found_file);
+        if (ret != 0)
+            return ret;
+    }
     if (first_file->next != NULL)
     {
-        return _find_file(recur_level + 1, caller, name, first_file->next, found_file);
+        int ret = _find_file(recur_level + 1, caller, name, name_len, first_file->next, found_file);
+        if (ret != 0)
+            return ret;
     }
-    printf("[%s][%s]: did not find file \"%s\"\n", caller, __func__, name);
     return 0;
+}
+
+int find_filen(const char* caller, const char* name, size_t name_len, struct file_t* first_file, struct file_t** found_file)
+{
+    struct timespec start_time;
+    if (clock_gettime(CLOCK_MONOTONIC, &start_time))
+        return _find_file(0, caller, name, name_len, first_file, found_file);
+
+    int ret = _find_file(0, caller, name, name_len, first_file, found_file);
+    if (ret == 0)
+        printf("[%s][%s]: did not find file \"%.*s\"\n", caller, __func__, (int)name_len, name);
+
+    struct timespec end_time;
+    if (clock_gettime(CLOCK_MONOTONIC, &end_time))
+        return ret;
+
+    ANNOYING_PRINTF("[%s][%s]: Path: \"%.*s\", time: %fus\n", caller, __func__, (int)name_len, name,
+        (((end_time.tv_sec - start_time.tv_sec) * 1000000000) + (end_time.tv_nsec - start_time.tv_nsec)) / 1000.0);
+    return ret;
 }
 
 int find_file(const char* caller, const char* name, struct file_t* first_file, struct file_t** found_file)
 {
-    struct timespec start_time;
-    if (clock_gettime(CLOCK_MONOTONIC, &start_time))
-        return _find_file(0, caller, name, first_file, found_file);
-    int             ret = _find_file(0, caller, name, first_file, found_file);
-    struct timespec end_time;
-    if (clock_gettime(CLOCK_MONOTONIC, &end_time))
-        return ret;
-    ANNOYING_PRINTF("[%s][%s]: Path: \"%s\", time: %fus\n", caller, __func__, name,
-        (((end_time.tv_sec - start_time.tv_sec) * 1000000000) + (end_time.tv_nsec - start_time.tv_nsec)) / 1000.0);
-    return ret;
+    return find_filen(caller, name, strlen(name), first_file, found_file);
 }
 
 int append_file(struct file_t* first_file, struct file_t* new_file)
@@ -199,6 +218,26 @@ int append_file(struct file_t* first_file, struct file_t* new_file)
     if (first_file == NULL || new_file == NULL)
         return 0;
     struct file_t* cur_file = first_file;
+    while (cur_file->next != NULL)
+        cur_file = cur_file->next;
+    cur_file->next = new_file;
+    new_file->prev = cur_file;
+    new_file->next = NULL;
+    return 1;
+}
+
+int append_file_as_child(struct file_t* parent_file, struct file_t* new_file)
+{
+    if (parent_file == NULL || new_file == NULL)
+        return 0;
+    new_file->parent = parent_file;
+    if (parent_file->child == NULL)
+    {
+        parent_file->child = new_file;
+        return 1;
+    }
+
+    struct file_t* cur_file = parent_file->child;
     while (cur_file->next != NULL)
         cur_file = cur_file->next;
     cur_file->next = new_file;
@@ -215,13 +254,19 @@ int remove_file(struct file_t* file)
 {
     if (file == NULL)
         return 0;
+    if (file->child != NULL)
+        return 0;
 
     if (file->next != NULL)
         file->next->prev = file->prev;
     if (file->prev != NULL)
         file->prev->next = file->next;
-    file->next = NULL;
-    file->prev = NULL;
+    if (file->parent != NULL && file->parent->child == file)
+        file->parent->child = file->next;
+
+    file->parent = NULL;
+    file->next   = NULL;
+    file->prev   = NULL;
 
     return 1;
 }
@@ -234,12 +279,15 @@ int free_files(struct file_t* first_file)
 {
     if (first_file == NULL)
         return 0;
-    struct file_t* next_file = first_file->next;
+    struct file_t* next_file  = first_file->next;
+    struct file_t* child_file = first_file->child;
     FREE(first_file->name);
     FREE(first_file->buf);
     FREE(first_file);
+    if (child_file != NULL)
+        free_files(next_file);
     if (next_file != NULL)
-        return free_files(next_file);
+        free_files(next_file);
     return 1;
 }
 
@@ -292,7 +340,7 @@ int file_rename(struct file_t* file, const char* new_name)
     if (file == NULL)
         return 0;
     size_t old_name_len = 0;
-    size_t new_name_len = strlen(new_name);
+    size_t new_name_len = strlen(new_name) + 1;
     if (file->name != NULL)
         old_name_len = file->name_buf_size;
 
@@ -352,21 +400,51 @@ static struct filesystem_t* get_filesytem_from_fuse_context()
     return ctx->private_data;
 }
 
+/**
+ * This function is equivalent to GNU basename(3), in that it won't modify path
+ */
+static const char* _basename(const char* path)
+{
+    if (path == NULL)
+        return ".";
+    size_t len       = strlen(path);
+    size_t start_pos = 0;
+    for (size_t i = 0; i < len; i++)
+    {
+        if (path[i] == '/')
+            start_pos = i + 1;
+    }
+
+    if (start_pos < len)
+        return &path[start_pos];
+    else
+        return ".";
+}
+
 static int ramfs_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi, enum fuse_readdir_flags flags)
 {
-    ANNOYING_PRINTF("[%s]: Path: \"%s\"\n", __func__, path);
+    printf("[%s:%d]: Path: \"%s\"\n", __func__, __LINE__, path);
 
-    if (path == NULL || strcmp(path, "/") != 0)
+    struct file_t* cur_file   = fi == NULL ? NULL : ((struct file_t*)fi->fh);
+    struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
+    if (cur_file == NULL && !find_file(__func__, path, _root_file, &cur_file))
         return -ENOENT;
+
+    if (!(cur_file->mode & S_IFDIR))
+        return -ENOTDIR;
 
     filler(buf, ".", NULL, 0, FUSE_FILL_DIR_DEFAULTS);
     filler(buf, "..", NULL, 0, FUSE_FILL_DIR_DEFAULTS);
-    struct file_t* cur_file = get_filesytem_from_fuse_context()->root_file;
-    while (cur_file->next != NULL)
+
+    if (cur_file->child == NULL)
+        return 0;
+    cur_file = cur_file->child;
+
+    while (cur_file != NULL)
     {
-        cur_file = cur_file->next;
         if (cur_file->name != NULL)
-            filler(buf, cur_file->name, NULL, 0, FUSE_FILL_DIR_DEFAULTS);
+            filler(buf, _basename(cur_file->name), NULL, 0, FUSE_FILL_DIR_DEFAULTS);
+        cur_file = cur_file->next;
     }
     return 0;
 }
@@ -375,12 +453,14 @@ static int ramfs_truncate(const char* path, off_t size, struct fuse_file_info* f
 static int ramfs_open(const char* path, struct fuse_file_info* fi)
 {
     ANNOYING_PRINTF("[%s]: Path: \"%s\"\n", __func__, path);
-    if (path != NULL && strcmp(path, "/") == 0)
-        return -EISDIR;
 
     struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
-    if (find_file(__func__, &path[1], _root_file, (struct file_t**)&fi->fh))
+    if (find_file(__func__, path, _root_file, (struct file_t**)&fi->fh))
+    {
+        if (((struct file_t*)fi->fh)->mode & S_IFDIR)
+            return -EISDIR;
         ((struct file_t*)fi->fh)->nrefs++;
+    }
     else
     {
         fi->fh = 0;
@@ -395,13 +475,13 @@ static int ramfs_open(const char* path, struct fuse_file_info* fi)
 static int ramfs_read(const char* path, char* buf, size_t size, off_t _offset, struct fuse_file_info* fi)
 {
     printf("[%s]: Path: \"%s\"\n", __func__, path);
-    if (path != NULL && strcmp(path, "/") == 0)
-        return -EISDIR;
 
     struct file_t* file       = fi == NULL ? NULL : ((struct file_t*)fi->fh);
     struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
-    if (file == NULL && !find_file(__func__, &path[1], _root_file, &file))
+    if (file == NULL && !find_file(__func__, path, _root_file, &file))
         return -ENOENT;
+    if (file->mode & S_IFDIR)
+        return -EISDIR;
 
     file_update_times(file, FILE_TIME_LEVEL_ACCESS);
 
@@ -417,21 +497,48 @@ static int ramfs_read(const char* path, char* buf, size_t size, off_t _offset, s
         return 0;
 }
 
+/**
+ * Gets the length of the directory part of a path for use in functions like strncmp(3)
+ */
+static size_t dirname_len(const char* path, size_t path_len)
+{
+    size_t dir_len = 0;
+    for (size_t i = 0; i < path_len; i++)
+    {
+        if (path[i] == '/')
+            dir_len = i;
+    }
+    if (dir_len == 0 && path_len > 1 && path[dir_len] == '/')
+        dir_len++;
+    return dir_len;
+}
+
 static int ramfs_mknod(const char* path, mode_t mode, dev_t rdev)
 {
     printf("[%s]: Path: \"%s\"\n", __func__, path);
     if (path == NULL)
         return -EIO;
     struct file_t* file;
+    struct file_t* dir_file;
     struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
-    if (find_file(__func__, &path[1], _root_file, &file))
+
+    size_t path_len = strlen(path);
+    size_t dir_len  = dirname_len(path, path_len);
+
+    printf("[%s]: Dir: \"%.*s\"\n", __func__, (int)dir_len, path);
+
+    if (!find_filen(__func__, path, dir_len, _root_file, &dir_file))
+        return -ENOENT;
+    if (!(dir_file->mode & S_IFDIR))
+        return -ENOTDIR;
+    if (find_filen(__func__, path, path_len, _root_file, &file))
         return -EEXIST;
     struct file_t* f1;
-    if (!create_file(&path[1], &f1))
+    if (!create_file(path, &f1))
         return -ENOSPC;
 
     printf("[%s]: file created, appending...\n", __func__);
-    if (!append_file(_root_file, f1))
+    if (!append_file_as_child(dir_file, f1))
     {
         printf("[%s]: appending failed, free file\n", __func__);
         free_files(f1);
@@ -445,10 +552,10 @@ static int ramfs_unlink(const char* path)
     printf("[%s]: Path: \"%s\"\n", __func__, path);
     struct file_t* file       = NULL;
     struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
-    if (path != NULL && strcmp(path, "/") == 0)
-        return -EISDIR;
-    else if (file != NULL || find_file(__func__, &path[1], _root_file, &file))
+    if (file != NULL || find_file(__func__, path, _root_file, &file))
     {
+        if (file->mode & S_IFDIR)
+            return -EISDIR;
         if (--file->nlink > 0)
             return 0;
         if (!remove_file(file))
@@ -480,38 +587,53 @@ static int ramfs_release(const char* path, struct fuse_file_info* fi)
 static int ramfs_rename(const char* oldpath, const char* newpath, unsigned int flags)
 {
     printf("[%s]: \"%s\"->\"%s\"\n", __func__, oldpath, newpath);
+
+    size_t oldpath_len     = strlen(oldpath);
+    size_t newpath_len     = strlen(newpath);
+    size_t oldpath_dir_len = dirname_len(oldpath, oldpath_len);
+    size_t newpath_dir_len = dirname_len(newpath, newpath_len);
+
+    /* Temporary check to disable cross directory renaming */
+    if (oldpath_dir_len != newpath_dir_len && strncmp(oldpath, newpath, oldpath_len))
+        return -EINVAL;
+
     struct file_t* old_file   = NULL;
     struct file_t* new_file   = NULL;
     struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
 
     if ((flags & RENAME_EXCHANGE && flags & RENAME_NOREPLACE) || flags & RENAME_WHITEOUT)
         return -EINVAL;
-    if (strcmp(oldpath, "/") == 0)
+    if (strcmp(oldpath, _root_file->name) == 0)
         return -EACCES;
 
-    if (!find_file(__func__, &oldpath[1], _root_file, &old_file))
+    if (!find_filen(__func__, oldpath, oldpath_len, _root_file, &old_file))
         return -ENOENT;
-    find_file(__func__, &newpath[1], _root_file, &new_file);
+    find_filen(__func__, newpath, newpath_len, _root_file, &new_file);
+
+    /* Temporary check to disable directory renaming */
+    if (old_file->mode & S_IFDIR)
+        return -EINVAL;
+    if (new_file != NULL && new_file->mode & S_IFDIR)
+        return -EINVAL;
 
     if (flags & RENAME_NOREPLACE && new_file != NULL)
     {
         if (new_file != NULL)
             return -EEXIST;
-        if (!file_rename(old_file, &newpath[1]))
+
+        if (!file_rename(old_file, newpath))
             return -ENOMEM;
     }
     else if (flags & RENAME_EXCHANGE)
     {
         if (new_file == NULL)
             return -ENOENT;
-        char* oldname  = old_file->name;
-        old_file->name = new_file->name;
-        new_file->name = oldname;
+
         file_update_times(new_file, FILE_TIME_LEVEL_MODIFY_METADATA);
     }
     else
     {
-        if (!file_rename(old_file, &newpath[1]))
+        if (!file_rename(old_file, newpath))
             return -ENOMEM;
         if (new_file != NULL)
             if (remove_file(new_file) && --new_file->nlink > 0 && --new_file->nrefs > 0)
@@ -525,10 +647,11 @@ static int ramfs_truncate(const char* path, off_t size, struct fuse_file_info* f
 {
     struct file_t* file       = fi == NULL ? NULL : ((struct file_t*)fi->fh);
     struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
-    if (path != NULL && strcmp(path, "/") == 0)
-        return -EISDIR;
-    else if (file != NULL || find_file(__func__, &path[1], _root_file, &file))
+
+    if (file != NULL || find_file(__func__, path, _root_file, &file))
     {
+        if (file->mode & S_IFDIR)
+            return -EISDIR;
         if (!file_resize_buf(__func__, file, size))
             return -ENOSPC;
         file_update_times(file, FILE_TIME_LEVEL_MODIFY_CONTENTS);
@@ -545,12 +668,10 @@ static int ramfs_write(const char* path, const char* buf, size_t size, off_t off
     struct file_t* file       = fi == NULL ? NULL : ((struct file_t*)fi->fh);
     struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
 
-    if (path != NULL && strcmp(path, "/") == 0)
+    if ((file != NULL || find_file(__func__, path, _root_file, &file)))
     {
-        return -EISDIR;
-    }
-    else if (file != NULL || find_file(__func__, &path[1], _root_file, &file))
-    {
+        if (file->mode & S_IFDIR)
+            return -EISDIR;
         size_t msize = size + off;
         if (size == 0)
             return 0;
@@ -574,7 +695,7 @@ static int ramfs_symlink(const char* target, const char* linkname)
 
     struct file_t* file       = NULL;
     struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
-    if (find_file(__func__, &linkname[1], _root_file, &file))
+    if (find_file(__func__, linkname, _root_file, &file))
     {
         file->mode -= S_IFREG;
         file->mode |= S_IFLNK;
@@ -594,7 +715,7 @@ static int ramfs_readlink(const char* path, char* buf, size_t buf_size)
     printf("[%s]: Path: \"%s\", buf_size: %zu\n", __func__, path, buf_size);
     struct file_t* file       = NULL;
     struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
-    if (!find_file(__func__, &path[1], _root_file, &file))
+    if (!find_file(__func__, path, _root_file, &file))
         return -ENOENT;
     if (!(file->mode & S_IFLNK))
         return -EINVAL;
@@ -620,9 +741,7 @@ static int ramfs_getattr(const char* path, struct stat* st, struct fuse_file_inf
     struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
 
     memset(st, 0, sizeof(struct stat));
-    if (path != NULL && strcmp(path, "/") == 0)
-        file = _root_file;
-    else if (file != NULL || find_file(__func__, &path[1], _root_file, &file))
+    if (file != NULL || find_file(__func__, path, _root_file, &file))
         st->st_size = file->file_size;
     else
         return -ENOENT;
@@ -635,6 +754,14 @@ static int ramfs_getattr(const char* path, struct stat* st, struct fuse_file_inf
     st->st_mode  = file->mode;
     st->st_nlink = file->nlink;
 
+    /* Not particularly efficient, but works */
+    file = file->child;
+    while (file != NULL)
+    {
+        if (file->mode & S_IFDIR)
+            st->st_nlink++; /* Subdirs containing ".." count as hardlinks */
+        file = file->next;
+    }
     return 0;
 }
 
@@ -647,9 +774,7 @@ static int ramfs_statx(const char* path, int flags, int mask, struct statx* stx,
     struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
 
     memset(stx, 0, sizeof(struct stat));
-    if (path != NULL && strcmp(path, "/") == 0)
-        file = _root_file;
-    else if (file != NULL || find_file(__func__, &path[1], _root_file, &file))
+    if (file != NULL || find_file(__func__, path, _root_file, &file))
     {
         stx->stx_size = file->file_size;
         stx->stx_mask |= STATX_SIZE;
@@ -675,32 +800,72 @@ static int ramfs_statx(const char* path, int flags, int mask, struct statx* stx,
     stx->stx_nlink = file->nlink;
     stx->stx_mask |= STATX_UID | STATX_GID | STATX_MODE | STATX_NLINK;
 
+    /* Not particularly efficient, but works */
+    file = file->child;
+    while (file != NULL)
+    {
+        if (file->mode & S_IFDIR)
+            stx->stx_nlink++; /* Subdirs containing ".." count as hardlinks */
+        file = file->next;
+    }
     return 0;
 }
 #endif
 
 /* This is only meant to be used when initializing the filesystem and should only be called once as it does not check for duplicate files */
-static void create_blank_nodes_for_stress(struct file_t* _root_file, uint num_nodes)
+static void create_blank_nodes_for_stress(struct file_t* _root_file, uint num_dirs, uint num_files)
 {
     struct file_t* f1            = NULL;
-    size_t         name_buf_size = 64;
+    struct file_t* dir           = _root_file;
+    size_t         name_buf_size = 128;
     char*          name_buf      = calloc(name_buf_size, sizeof(char));
+
     if (name_buf == NULL)
     {
         printf("[%s]: Failed to create name buffer\n", __func__);
         return;
     }
-    for (uint i = 0; i < num_nodes; i++)
+
+    static uint counter_dir  = 0;
+    static uint counter_file = 0;
+
+    for (uint j = 0; j < num_dirs; j++)
     {
-        snprintf(name_buf, name_buf_size, "file_0x%08X.txt", i);
+        for (uint k = 0; k < num_files; k++)
+        {
+            if (dir != _root_file)
+                snprintf(name_buf, name_buf_size, "%s/file_0x%04X.txt", dir->name, counter_file++);
+            else
+                snprintf(name_buf, name_buf_size, "%sfile_0x%04X.txt", dir->name, counter_file++);
+            if (create_file(name_buf, &f1))
+            {
+                ANNOYING_PRINTF("[%s]: file created, appending...\n", __func__);
+                if (!append_file_as_child(dir, f1))
+                {
+                    ANNOYING_PRINTF("[%s]: appending failed, freeing file...\n", __func__);
+                    free_files(f1);
+                }
+            }
+        }
+
+        if (dir != _root_file)
+            snprintf(name_buf, name_buf_size, "%s/dir_0x%04X", dir->name, counter_dir++);
+        else
+            snprintf(name_buf, name_buf_size, "%sdir_0x%04X", dir->name, counter_dir++);
+
         if (create_file(name_buf, &f1))
         {
-            ANNOYING_PRINTF("[%s]: file created, appending...\n", __func__);
-            if (!append_file(_root_file, f1))
+            ANNOYING_PRINTF("[%s]: directory created, appending...\n", __func__);
+            f1->mode &= ~S_IFMT;
+            f1->mode |= S_IFDIR;
+            f1->nlink = 2;
+            if (!append_file_as_child(dir, f1))
             {
-                ANNOYING_PRINTF("[%s]: appending failed, free file\n", __func__);
+                ANNOYING_PRINTF("[%s]: appending failed, freeing directory...\n", __func__);
                 free_files(f1);
             }
+            else
+                dir = f1;
         }
     }
     FREE(name_buf);
@@ -734,16 +899,35 @@ static void* ramfs_init(struct fuse_conn_info* conn, struct fuse_config* cfg)
 
     fs->root_file->mode  = S_IFDIR | 0755;
     fs->root_file->nlink = 2;
-    create_blank_nodes_for_stress(fs->root_file, 65536 / 256);
+    create_blank_nodes_for_stress(fs->root_file, 4, 4);
+    create_blank_nodes_for_stress(fs->root_file, 4, 4);
     double elapsed = 0.0;
     TIME_BLOCK_END(elapsed);
     printf("[%s]: Filesystem initialized in %fms\n", __func__, elapsed / 1000);
     return fs;
 }
 
+void print_fs_structure(struct file_t* file, long int level)
+{
+    if (file == NULL)
+        return;
+    for (int i = 0; i < level; i++)
+    {
+        if (i % 4 == 0)
+            putc('|', stdout);
+        else
+            putc(' ', stdout);
+    }
+    printf("+ \"%s\"\n", file->name);
+
+    print_fs_structure(file->child, level + 4);
+    print_fs_structure(file->next, level);
+}
+
 static void ramfs_destroy(void* _fs)
 {
     struct filesystem_t* fs = _fs;
+    print_fs_structure(fs->root_file, 0);
     free_files(fs->root_file);
     FREE(fs);
 }
@@ -774,6 +958,9 @@ int main(int argc, char* argv[])
     /* KDevelop buffers the output and will not display anything */
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
+#ifdef __STDC_VERSION__
+    printf("Built against C Standard: %ld\n", __STDC_VERSION__);
+#endif
 #ifdef ENABLE_STATX
     printf("statx(2) support enabled!\n");
 #endif
