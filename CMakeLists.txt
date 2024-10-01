@@ -29,7 +29,7 @@ pkg_check_modules(FUSE3 REQUIRED fuse3)
 
 include_directories(${FUSE3_INCLUDE_DIRS})
 
-add_executable(ramfs_fuse main.c)
+add_executable(ramfs_fuse main.c file.c util.c)
 
 target_compile_definitions(ramfs_fuse PRIVATE _DEFAULT_SOURCE _GNU_SOURCE)
 set(ENABLE_STATX OFF CACHE BOOL "Enables response to statx(2) (Requires libfuse to support statx)")

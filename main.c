@@ -38,356 +38,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define FILE_BUF_SIZE_ALIGN 4096
-/* When the buffer is below this percentage, shrink the buffer */
-#define FILE_BUF_SIZE_SHRINK_PERCENTAGE 50
-
-#if 0
-#define ANNOYING_PRINTF(fmt, ...) printf(fmt, ##__VA_ARGS__)
-#else
-#define ANNOYING_PRINTF(fmt, ...)
-#endif
-
-#define TIME_BLOCK_START()        \
-    struct timespec __start_time; \
-    clock_gettime(CLOCK_MONOTONIC, &__start_time);
-#define TIME_BLOCK_END(var)                                                                                                      \
-    do                                                                                                                           \
-    {                                                                                                                            \
-        struct timespec __end_time;                                                                                              \
-        clock_gettime(CLOCK_MONOTONIC, &__end_time);                                                                             \
-        var = (((__end_time.tv_sec - __start_time.tv_sec) * 1000000000) + (__end_time.tv_nsec - __start_time.tv_nsec)) / 1000.0; \
-    } while (0)
-
-#define FREE(ptr)        \
-    do                   \
-    {                    \
-        if (ptr != NULL) \
-        {                \
-            free(ptr);   \
-            ptr = NULL;  \
-        }                \
-    } while (0)
-
-struct file_t
-{
-    char*  name;
-    size_t name_buf_size;
-
-    struct file_t* parent;
-    struct file_t* child;
-    struct file_t* prev;
-    struct file_t* next;
-
-    size_t buf_size;
-    size_t file_size;
-    char*  buf;
-
-    /**
-     * Access time
-     * Because this is a ramfs we will update this every time
-     * the contents of buf are modified, read, or created
-     *
-     *
-     *
-     * see strictatime and relatime fs mount options for future ideas
-     */
-    struct timespec atime;
-    /** Metadata Modification time (also includes non-zero calls to write) */
-    struct timespec ctime;
-    /** Content Modification time */
-    struct timespec mtime;
-    /** File_t creation time (should not be changed) */
-    struct timespec btime;
-
-    uid_t uid;
-    gid_t gid;
-
-    mode_t mode;
-    /**
-     * Number of hard links to file, in the case of directories there is the . directory which increases the value to 1
-     * If nlink and refs both hit 0, then delete (this will be important when and if hardlinks are implemented)
-     */
-    nlink_t nlink;
-    /**
-     * Number of unreleased open() calls to the files
-     * If nlink and refs both hit 0, then the file can be deleted (this will be important when and if hardlinks are implemented)
-     */
-    size_t nrefs;
-};
-
-struct filesystem_t
-{
-    struct file_t* root_file;
-};
-
-/**
- * Values that control which time fields will be updated by file_update_times
- */
-enum file_time_update_level_t
-{
-    FILE_TIME_LEVEL_ACCESS          = 0,
-    FILE_TIME_LEVEL_MODIFY_METADATA = 1,
-    FILE_TIME_LEVEL_MODIFY_CONTENTS = 2,
-    FILE_TIME_LEVEL_CREATION        = 3,
-};
-
-/**
- * Helper function to update appropriate file times
- *
- * Returns 1 on success and 0 on failure
- */
-static int file_update_times(struct file_t* file, enum file_time_update_level_t level)
-{
-    struct timespec t;
-    if (clock_gettime(CLOCK_REALTIME, &t))
-        return 0;
-    switch (level)
-    {
-    case FILE_TIME_LEVEL_CREATION:
-        file->btime = t;
-        /* FALLTHRU */
-    case FILE_TIME_LEVEL_MODIFY_CONTENTS:
-        file->mtime = t;
-        file->ctime = t; /* Contents being modified counts as a metadata change, I think */
-        /* FALLTHRU */
-    case FILE_TIME_LEVEL_ACCESS:
-        file->atime = t;
-        break;
-    case FILE_TIME_LEVEL_MODIFY_METADATA:
-        file->ctime = t;
-        break;
-    default:
-        return 0;
-    }
-    return 1;
-}
-
-/* Finds a file by recursing through the linked list, sets found_file and returns true if name found */
-int _find_file(size_t recur_level, const char* caller, const char* name, size_t name_len, struct file_t* first_file, struct file_t** found_file)
-{
-    if (first_file == NULL || name == NULL || found_file == NULL || strlen(name) == 0)
-        return 0;
-    if (first_file->name != NULL && strncmp(first_file->name, name, name_len) == 0 && first_file->name[name_len] == '\0')
-    {
-        printf("[%s][%s]: found file \"%.*s\", level: %zu\n", caller, __func__, (int)name_len, name, recur_level);
-        *found_file = first_file;
-        return 1;
-    }
-    if (first_file->child != NULL)
-    {
-        int ret = _find_file(recur_level + 1, caller, name, name_len, first_file->child, found_file);
-        if (ret != 0)
-            return ret;
-    }
-    if (first_file->next != NULL)
-    {
-        int ret = _find_file(recur_level + 1, caller, name, name_len, first_file->next, found_file);
-        if (ret != 0)
-            return ret;
-    }
-    return 0;
-}
-
-int find_filen(const char* caller, const char* name, size_t name_len, struct file_t* first_file, struct file_t** found_file)
-{
-    struct timespec start_time;
-    if (clock_gettime(CLOCK_MONOTONIC, &start_time))
-        return _find_file(0, caller, name, name_len, first_file, found_file);
-
-    int ret = _find_file(0, caller, name, name_len, first_file, found_file);
-    if (ret == 0)
-        printf("[%s][%s]: did not find file \"%.*s\"\n", caller, __func__, (int)name_len, name);
-
-    struct timespec end_time;
-    if (clock_gettime(CLOCK_MONOTONIC, &end_time))
-        return ret;
-
-    ANNOYING_PRINTF("[%s][%s]: Path: \"%.*s\", time: %fus\n", caller, __func__, (int)name_len, name,
-        (((end_time.tv_sec - start_time.tv_sec) * 1000000000) + (end_time.tv_nsec - start_time.tv_nsec)) / 1000.0);
-    return ret;
-}
-
-int find_file(const char* caller, const char* name, struct file_t* first_file, struct file_t** found_file)
-{
-    return find_filen(caller, name, strlen(name), first_file, found_file);
-}
-
-int append_file(struct file_t* first_file, struct file_t* new_file)
-{
-    if (first_file == NULL || new_file == NULL)
-        return 0;
-    struct file_t* cur_file = first_file;
-    while (cur_file->next != NULL)
-        cur_file = cur_file->next;
-    cur_file->next = new_file;
-    new_file->prev = cur_file;
-    new_file->next = NULL;
-    return 1;
-}
-
-int append_file_as_child(struct file_t* parent_file, struct file_t* new_file)
-{
-    if (parent_file == NULL || new_file == NULL)
-        return 0;
-    new_file->parent = parent_file;
-    if (parent_file->child == NULL)
-    {
-        parent_file->child = new_file;
-        return 1;
-    }
-
-    struct file_t* cur_file = parent_file->child;
-    while (cur_file->next != NULL)
-        cur_file = cur_file->next;
-    cur_file->next = new_file;
-    new_file->prev = cur_file;
-    new_file->next = NULL;
-    return 1;
-}
-
-/**
- * Removes a file from the a file_t linked list
- * Returns 1 on success and 0 on failure
- */
-int remove_file(struct file_t* file)
-{
-    if (file == NULL)
-        return 0;
-    if (file->child != NULL)
-        return 0;
-
-    if (file->next != NULL)
-        file->next->prev = file->prev;
-    if (file->prev != NULL)
-        file->prev->next = file->next;
-    if (file->parent != NULL && file->parent->child == file)
-        file->parent->child = file->next;
-
-    file->parent = NULL;
-    file->next   = NULL;
-    file->prev   = NULL;
-
-    return 1;
-}
-
-/**
- * Frees a file and all following file_t->next entries
- * Returns 1 on success and 0 on failure
- */
-int free_files(struct file_t* first_file)
-{
-    if (first_file == NULL)
-        return 0;
-    struct file_t* next_file  = first_file->next;
-    struct file_t* child_file = first_file->child;
-    FREE(first_file->name);
-    FREE(first_file->buf);
-    FREE(first_file);
-    if (child_file != NULL)
-        free_files(next_file);
-    if (next_file != NULL)
-        free_files(next_file);
-    return 1;
-}
-
-int file_resize_buf(const char* caller, struct file_t* file, size_t req_size)
-{
-    if (file == NULL)
-        return 0;
-    size_t size = 0;
-    if (req_size != 0)
-        size = ((req_size / FILE_BUF_SIZE_ALIGN) + 1) * FILE_BUF_SIZE_ALIGN;
-    printf("[%s][%s]: Resize \"%s\" size(buf): %zu(%zu)->%zu(%zu)\n", caller, __func__, file->name, file->file_size, file->buf_size, req_size, size);
-
-    if (size == 0)
-    {
-        FREE(file->buf);
-        file->buf_size  = 0;
-        file->file_size = 0;
-        return 1;
-    }
-
-    if (file->buf_size < size || size < (file->buf_size * FILE_BUF_SIZE_SHRINK_PERCENTAGE / 100))
-    {
-        char* new_ptr;
-        if (file->buf != NULL)
-            new_ptr = realloc(file->buf, size);
-        else
-            new_ptr = calloc(size, sizeof(char));
-        if (new_ptr == NULL)
-            return 0;
-        file->buf_size = size;
-        file->buf      = new_ptr;
-        if (file->file_size < size)
-        {
-            size_t diff = size - file->file_size;
-            memset(&file->buf[file->file_size], 0, diff);
-        }
-    }
-
-    file->file_size = req_size;
-    return 1;
-}
-
-/**
- * Renames a file, does not check to see if this causes a conflict.
- *
- * Returns 1 on success and 0 on failure
- */
-int file_rename(struct file_t* file, const char* new_name)
-{
-    if (file == NULL)
-        return 0;
-    size_t old_name_len = 0;
-    size_t new_name_len = strlen(new_name) + 1;
-    if (file->name != NULL)
-        old_name_len = file->name_buf_size;
-
-    if (new_name_len == 0)
-    {
-        FREE(file->name);
-        file->name_buf_size = 0;
-        return 1;
-    }
-    else if (old_name_len < new_name_len)
-    {
-        char* new_name_buf = calloc(new_name_len, sizeof(char));
-        char* old_name_buf = file->name;
-        if (new_name_buf == NULL)
-            return 0;
-        memcpy(new_name_buf, new_name, new_name_len);
-        file->name = new_name_buf;
-        FREE(old_name_buf);
-        return 1;
-    }
-    else if (new_name_len < old_name_len)
-    {
-        memcpy(file->name, new_name, new_name_len);
-        return 1;
-    }
-    return 0;
-}
-
-int create_file(const char* name, struct file_t** file_ptr)
-{
-    if (file_ptr == NULL)
-        return 0;
-    struct file_t* file = calloc(1, sizeof(struct file_t));
-    if (file == NULL)
-        return 0;
-    if (!file_rename(file, name))
-        return 0;
-    file_resize_buf(__func__, file, 0);
-    file_update_times(file, FILE_TIME_LEVEL_CREATION);
-    file->uid   = getuid();
-    file->gid   = getuid();
-    file->mode  = S_IFREG | 0644;
-    file->nlink = 1;
-
-    *file_ptr = file;
-    return 1;
-}
+#include "file.h"
+#include "util.h"
 
 /**
  * A simple wrapper over fuse_get_context()->private_data to limit line length
@@ -398,27 +50,6 @@ static struct filesystem_t* get_filesytem_from_fuse_context()
     if (ctx == NULL)
         return NULL;
     return ctx->private_data;
-}
-
-/**
- * This function is equivalent to GNU basename(3), in that it won't modify path
- */
-static const char* _basename(const char* path)
-{
-    if (path == NULL)
-        return ".";
-    size_t len       = strlen(path);
-    size_t start_pos = 0;
-    for (size_t i = 0; i < len; i++)
-    {
-        if (path[i] == '/')
-            start_pos = i + 1;
-    }
-
-    if (start_pos < len)
-        return &path[start_pos];
-    else
-        return ".";
 }
 
 static int ramfs_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi, enum fuse_readdir_flags flags)
@@ -443,7 +74,7 @@ static int ramfs_readdir(const char* path, void* buf, fuse_fill_dir_t filler, of
     while (cur_file != NULL)
     {
         if (cur_file->name != NULL)
-            filler(buf, _basename(cur_file->name), NULL, 0, FUSE_FILL_DIR_DEFAULTS);
+            filler(buf, util_basename(cur_file->name), NULL, 0, FUSE_FILL_DIR_DEFAULTS);
         cur_file = cur_file->next;
     }
     return 0;
@@ -497,22 +128,6 @@ static int ramfs_read(const char* path, char* buf, size_t size, off_t _offset, s
         return 0;
 }
 
-/**
- * Gets the length of the directory part of a path for use in functions like strncmp(3)
- */
-static size_t dirname_len(const char* path, size_t path_len)
-{
-    size_t dir_len = 0;
-    for (size_t i = 0; i < path_len; i++)
-    {
-        if (path[i] == '/')
-            dir_len = i;
-    }
-    if (dir_len == 0 && path_len > 1 && path[dir_len] == '/')
-        dir_len++;
-    return dir_len;
-}
-
 static int ramfs_mknod(const char* path, mode_t mode, dev_t rdev)
 {
     printf("[%s]: Path: \"%s\"\n", __func__, path);
@@ -523,7 +138,7 @@ static int ramfs_mknod(const char* path, mode_t mode, dev_t rdev)
     struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
 
     size_t path_len = strlen(path);
-    size_t dir_len  = dirname_len(path, path_len);
+    size_t dir_len  = util_dirname_len(path, path_len);
 
     printf("[%s]: Dir: \"%.*s\"\n", __func__, (int)dir_len, path);
 
@@ -534,14 +149,14 @@ static int ramfs_mknod(const char* path, mode_t mode, dev_t rdev)
     if (find_filen(__func__, path, path_len, _root_file, &file))
         return -EEXIST;
     struct file_t* f1;
-    if (!create_file(path, &f1))
+    if (!file_create(path, &f1))
         return -ENOSPC;
 
     printf("[%s]: file created, appending...\n", __func__);
-    if (!append_file_as_child(dir_file, f1))
+    if (!file_append_file_as_child(dir_file, f1))
     {
         printf("[%s]: appending failed, free file\n", __func__);
-        free_files(f1);
+        file_free_files(f1);
         return -EIO;
     }
     return 0;
@@ -558,9 +173,9 @@ static int ramfs_unlink(const char* path)
             return -EISDIR;
         if (--file->nlink > 0)
             return 0;
-        if (!remove_file(file))
+        if (!file_remove_file(file))
             return -EIO;
-        if (file->nrefs == 0 && !free_files(file))
+        if (file->nrefs == 0 && !file_free_files(file))
             return -EIO;
         return 0;
     }
@@ -578,8 +193,8 @@ static int ramfs_release(const char* path, struct fuse_file_info* fi)
 
     if (file->nlink > 0 || file->nrefs > 0)
         return 0;
-    remove_file(file); /* Make sure file is removed from a list */
-    free_files(file);
+    file_remove_file(file); /* Make sure file is removed from a list */
+    file_free_files(file);
 
     return 0;
 }
@@ -598,8 +213,8 @@ static int ramfs_rename(const char* oldpath, const char* newpath, unsigned int f
 
     size_t oldpath_len     = strlen(oldpath);
     size_t newpath_len     = strlen(newpath);
-    size_t oldpath_dir_len = dirname_len(oldpath, oldpath_len);
-    size_t newpath_dir_len = dirname_len(newpath, newpath_len);
+    size_t oldpath_dir_len = util_dirname_len(oldpath, oldpath_len);
+    size_t newpath_dir_len = util_dirname_len(newpath, newpath_len);
 
     /* Temporary check to disable cross directory renaming */
     if (oldpath_dir_len != newpath_dir_len && strncmp(oldpath, newpath, oldpath_len))
@@ -647,8 +262,8 @@ static int ramfs_rename(const char* oldpath, const char* newpath, unsigned int f
         if (!file_rename(old_file, newpath))
             return -ENOMEM;
         if (new_file != NULL)
-            if (remove_file(new_file) && --new_file->nlink > 0 && --new_file->nrefs > 0)
-                free_files(new_file);
+            if (file_remove_file(new_file) && --new_file->nlink > 0 && --new_file->nrefs > 0)
+                file_free_files(new_file);
     }
     file_update_times(old_file, FILE_TIME_LEVEL_MODIFY_METADATA);
     return 0;
@@ -823,65 +438,6 @@ static int ramfs_statx(const char* path, int flags, int mask, struct statx* stx,
 }
 #endif
 
-/* This is only meant to be used when initializing the filesystem and should only be called once as it does not check for duplicate files */
-static void create_blank_nodes_for_stress(struct file_t* _root_file, uint num_dirs, uint num_files)
-{
-    struct file_t* f1            = NULL;
-    struct file_t* dir           = _root_file;
-    size_t         name_buf_size = 128;
-    char*          name_buf      = calloc(name_buf_size, sizeof(char));
-
-    if (name_buf == NULL)
-    {
-        printf("[%s]: Failed to create name buffer\n", __func__);
-        return;
-    }
-
-    static uint counter_dir  = 0;
-    static uint counter_file = 0;
-
-    for (uint j = 0; j < num_dirs; j++)
-    {
-        for (uint k = 0; k < num_files; k++)
-        {
-            if (dir != _root_file)
-                snprintf(name_buf, name_buf_size, "%s/file_0x%04X.txt", dir->name, counter_file++);
-            else
-                snprintf(name_buf, name_buf_size, "%sfile_0x%04X.txt", dir->name, counter_file++);
-            if (create_file(name_buf, &f1))
-            {
-                ANNOYING_PRINTF("[%s]: file created, appending...\n", __func__);
-                if (!append_file_as_child(dir, f1))
-                {
-                    ANNOYING_PRINTF("[%s]: appending failed, freeing file...\n", __func__);
-                    free_files(f1);
-                }
-            }
-        }
-
-        if (dir != _root_file)
-            snprintf(name_buf, name_buf_size, "%s/dir_0x%04X", dir->name, counter_dir++);
-        else
-            snprintf(name_buf, name_buf_size, "%sdir_0x%04X", dir->name, counter_dir++);
-
-        if (create_file(name_buf, &f1))
-        {
-            ANNOYING_PRINTF("[%s]: directory created, appending...\n", __func__);
-            f1->mode &= ~S_IFMT;
-            f1->mode |= S_IFDIR;
-            f1->nlink = 2;
-            if (!append_file_as_child(dir, f1))
-            {
-                ANNOYING_PRINTF("[%s]: appending failed, freeing directory...\n", __func__);
-                free_files(f1);
-            }
-            else
-                dir = f1;
-        }
-    }
-    FREE(name_buf);
-}
-
 static void* ramfs_init(struct fuse_conn_info* conn, struct fuse_config* cfg)
 {
     TIME_BLOCK_START();
@@ -901,7 +457,7 @@ static void* ramfs_init(struct fuse_conn_info* conn, struct fuse_config* cfg)
         return NULL;
     }
 
-    if (!create_file("/", &fs->root_file))
+    if (!file_create("/", &fs->root_file))
     {
         printf("Unable to create root file!\n");
         exit(1);
@@ -910,36 +466,19 @@ static void* ramfs_init(struct fuse_conn_info* conn, struct fuse_config* cfg)
 
     fs->root_file->mode  = S_IFDIR | 0755;
     fs->root_file->nlink = 2;
-    create_blank_nodes_for_stress(fs->root_file, 4, 4);
-    create_blank_nodes_for_stress(fs->root_file, 4, 4);
+    file_create_blank_nodes_for_stress(fs->root_file, 4, 4);
+    file_create_blank_nodes_for_stress(fs->root_file, 4, 4);
     double elapsed = 0.0;
     TIME_BLOCK_END(elapsed);
     printf("[%s]: Filesystem initialized in %fms\n", __func__, elapsed / 1000);
     return fs;
 }
 
-void print_fs_structure(struct file_t* file, long int level)
-{
-    if (file == NULL)
-        return;
-    for (int i = 0; i < level; i++)
-    {
-        if (i % 4 == 0)
-            putc('|', stdout);
-        else
-            putc(' ', stdout);
-    }
-    printf("+ \"%s\"\n", file->name);
-
-    print_fs_structure(file->child, level + 4);
-    print_fs_structure(file->next, level);
-}
-
 static void ramfs_destroy(void* _fs)
 {
     struct filesystem_t* fs = _fs;
-    print_fs_structure(fs->root_file, 0);
-    free_files(fs->root_file);
+    file_print_tree(fs->root_file, 0);
+    file_free_files(fs->root_file);
     FREE(fs);
 }
 
