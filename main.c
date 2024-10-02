@@ -360,6 +360,41 @@ static int ramfs_readlink(const char* path, char* buf, size_t buf_size)
         return -EIO;
 }
 
+static int ramfs_utimens(const char* path, const struct timespec tv[2], struct fuse_file_info* fi)
+{
+    ANNOYING_PRINTF("[%s]: Path: \"%s\"\n", __func__, path);
+    struct file_t* file       = fi == NULL ? NULL : ((struct file_t*)fi->fh);
+    struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
+
+    if (file == NULL && !find_file(__func__, path, _root_file, &file))
+        return -ENOENT;
+
+    struct timespec tv_access = tv[0];
+    struct timespec tv_modify = tv[1];
+
+    if (tv_access.tv_nsec == UTIME_OMIT && tv_modify.tv_nsec == UTIME_OMIT)
+        return 0;
+
+    struct timespec t;
+    if (clock_gettime(CLOCK_REALTIME, &t))
+        return -EIO;
+
+    if (tv_access.tv_nsec == UTIME_NOW)
+        tv_access = t;
+    if (tv_modify.tv_nsec == UTIME_NOW)
+        tv_modify = t;
+    if (tv_access.tv_nsec == UTIME_OMIT)
+        tv_access = file->atime;
+    if (tv_modify.tv_nsec == UTIME_OMIT)
+        tv_modify = file->mtime;
+
+    file->atime = tv_access;
+    file->ctime = tv_modify;
+
+    file_update_times(file, FILE_TIME_LEVEL_MODIFY_METADATA);
+    return 0;
+}
+
 static int ramfs_getattr(const char* path, struct stat* st, struct fuse_file_info* fi)
 {
     ANNOYING_PRINTF("[%s]: Path: \"%s\"\n", __func__, path);
@@ -492,6 +527,7 @@ static const struct fuse_operations ramfs_operations = {
     .truncate = ramfs_truncate,
     .symlink  = ramfs_symlink,
     .readlink = ramfs_readlink,
+    .utimens  = ramfs_utimens,
     .getattr  = ramfs_getattr,
 /* As of 2024-09-21 libfuse statx support only exists in an yet to be merged github fork */
 #ifdef ENABLE_STATX
