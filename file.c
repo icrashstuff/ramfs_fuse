@@ -182,7 +182,14 @@ int file_resize_buf(const char* caller, struct file_t* file, size_t req_size)
         return 0;
     size_t size = 0;
     if (req_size != 0)
-        size = ((req_size / FILE_BUF_SIZE_ALIGN) + 1) * FILE_BUF_SIZE_ALIGN;
+    {
+        if (req_size < FILE_BUF_SIZE_ALIGN_MID)
+            size = ((req_size / FILE_BUF_SIZE_ALIGN_LOW) + 1) * FILE_BUF_SIZE_ALIGN_LOW;
+        else if (req_size < FILE_BUF_SIZE_ALIGN_HIGH)
+            size = ((req_size / FILE_BUF_SIZE_ALIGN_MID) + 1) * FILE_BUF_SIZE_ALIGN_MID;
+        else
+            size = ((req_size / FILE_BUF_SIZE_ALIGN_HIGH) + 1) * FILE_BUF_SIZE_ALIGN_HIGH;
+    }
     printf("[%s][%s]: Resize \"%s\" size(buf): %zu(%zu)->%zu(%zu)\n", caller, __func__, file->name, file->file_size, file->buf_size, req_size, size);
 
     if (size == 0)

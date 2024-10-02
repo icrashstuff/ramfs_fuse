@@ -27,9 +27,32 @@
 #include <sys/types.h>
 #include <time.h>
 
-#define FILE_BUF_SIZE_ALIGN 4096
+#ifndef FILE_BUF_SIZE_ALIGN_HIGH
+#define FILE_BUF_SIZE_ALIGN_HIGH 4096
+#endif
+
+/* This overrides FILE_BUF_SIZE_ALIGN_HIGH when req_size is less than FILE_BUF_SIZE_ALIGN_HIGH */
+#ifndef FILE_BUF_SIZE_ALIGN_MID
+#define FILE_BUF_SIZE_ALIGN_MID 256
+#endif
+
+/* This overrides FILE_BUF_SIZE_ALIGN_MID when req_size is less than FILE_BUF_SIZE_ALIGN_MID */
+#ifndef FILE_BUF_SIZE_ALIGN_LOW
+#define FILE_BUF_SIZE_ALIGN_LOW 64
+#endif
+
 /* When the buffer is below this percentage, shrink the buffer */
+#ifndef FILE_BUF_SIZE_SHRINK_PERCENTAGE
 #define FILE_BUF_SIZE_SHRINK_PERCENTAGE 50
+#endif
+
+#if FILE_BUF_SIZE_ALIGN_MID > FILE_BUF_SIZE_ALIGN_HIGH
+#error "FILE_BUF_SIZE_ALIGN_MID cannot be greater than FILE_BUF_SIZE_ALIGN_HIGH"
+#endif
+
+#if FILE_BUF_SIZE_ALIGN_LOW > FILE_BUF_SIZE_ALIGN_MID
+#error "FILE_BUF_SIZE_ALIGN_LOW cannot be greater than FILE_BUF_SIZE_ALIGN_MID"
+#endif
 
 struct file_t
 {
