@@ -1,9 +1,37 @@
     A ramfs implemented with FUSE (Filesystem in Userspace), so that I can
 learn a little about filesystem programming.
 
-    Please DO NOT use this in an enviroment you care about, if you need
+    Please DO NOT use this in an environment you care about, if you need
 ideas look at Linux's ramfs or tmpfs which have the advantage of being
 actual production filesystems and not someone's toy project created for
 their own amusement and education.
 
 This project is licensed under the MIT license.
+
+
+Building
+--------
+ramfs_fuse requires the following to build:
+- CMake
+- C99 compiler
+- libfuse (optionally with statx(2) support)
+
+$ cmake -B build .
+$ make
+
+
+Running
+-------
+$ cd build
+$ ./ramfs [options] /path/to/mountpoint
+
+Two options which you may find of some interest:
+    --debug-ramfs  Enables all ramfs_fuse debug messages
+    -f             Keeps ramfs_fuse in the foreground
+
+
+Unmounting
+----------
+$ fusermount -u /path/to/mountpoint
+or
+$ umount /path/to/mountpoint
