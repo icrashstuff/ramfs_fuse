@@ -329,8 +329,8 @@ static int ramfs_symlink(const char* target, const char* linkname)
         memset(&fi, 0, sizeof(struct fuse_file_info));
         fi.fh = (uint64_t)file;
         ramfs_write(linkname, target, strlen(target), 0, &fi);
-        printf("%zu\n", file->file_size);
-        printf("%s\n", file->buf);
+        ANNOYING_PRINTF("[%s]: Link: \"%s\", file size: %zu\n", __func__, linkname, file->file_size);
+        ANNOYING_PRINTF("[%s]: Link: \"%s\", contents: %s\n", __func__, linkname, file->buf);
         return 0;
     }
     return -EIO;
@@ -477,6 +477,7 @@ static void* ramfs_init(struct fuse_conn_info* conn, struct fuse_config* cfg)
 static void ramfs_destroy(void* _fs)
 {
     struct filesystem_t* fs = _fs;
+    printf("\n");
     file_print_tree(fs->root_file, 0);
     file_free_files(fs->root_file);
     FREE(fs);
@@ -502,12 +503,13 @@ static const struct fuse_operations ramfs_operations = {
     .init    = ramfs_init,
     .destroy = ramfs_destroy,
 };
-// -D_DEFAULT_SOURCE -D_BSD_SOURCE -D_XOPEN_SOURCE=700L
+
 int main(int argc, char* argv[])
 {
     /* KDevelop buffers the output and will not display anything */
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
+
 #ifdef __STDC_VERSION__
     printf("Built against C Standard: %ld\n", __STDC_VERSION__);
 #endif
@@ -516,7 +518,48 @@ int main(int argc, char* argv[])
 #endif
     fflush(stdout);
 
-    int ret = fuse_main(argc, argv, &ramfs_operations, NULL);
+    /* Not an elegant parser but it works */
+    char** argv_fuse  = calloc(argc, sizeof(char*));
+    int    argc_fuse  = 0;
+    int    show_help  = 0;
+    int    show_debug = 0;
+
+    if (argv_fuse == NULL)
+    {
+        printf("Argument parsing failure\n");
+        return 1;
+    }
+
+    for (int i = 0; i < argc; i++)
+    {
+        char* arg = argv[i];
+        if (strcmp("--debug-ramfs", arg) == 0)
+            show_debug = 1;
+        else
+            argv_fuse[argc_fuse++] = arg;
+
+        if ((strcmp("-h", arg) == 0 || strcmp("--help", arg) == 0))
+            show_help = 1;
+    }
+
+    if (show_debug)
+    {
+        util_annoying_printf = printf;
+        ANNOYING_PRINTF("util_annoying_printf set to printf\n");
+    }
+
+    if (show_help)
+    {
+        printf("\nUsage: %s [options] mountpoint\n", argv[0]);
+        printf("Filesystem options:\n");
+        printf("    --debug-ramfs       Enables all ramfs debug messages (ANNOYING_PRINTF)\n\n");
+        /* Setting argv[0] to a zero length string disables libfuse from printing another Usage string */
+        argv_fuse[0][0] = 0;
+    }
+
+    int ret = fuse_main(argc_fuse, argv_fuse, &ramfs_operations, NULL);
+
+    free(argv_fuse);
 
     return ret;
 }

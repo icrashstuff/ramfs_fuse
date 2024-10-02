@@ -26,11 +26,9 @@
 #include <sys/types.h>
 #include <time.h>
 
-#if 0
-#define ANNOYING_PRINTF(fmt, ...) printf(fmt, ##__VA_ARGS__)
-#else
-#define ANNOYING_PRINTF(fmt, ...)
-#endif
+extern int (*util_annoying_printf)(const char* fmt, ...);
+
+#define ANNOYING_PRINTF(fmt, ...) util_annoying_printf(fmt, ##__VA_ARGS__)
 
 #define TIME_BLOCK_START()        \
     struct timespec __start_time; \
@@ -62,5 +60,7 @@ const char* util_basename(const char* path);
  * Gets the length of the directory part of a path for use in functions like strncmp(3)
  */
 size_t util_dirname_len(const char* path, size_t path_len);
+
+int util_annoying_prinf_null(const char* fmt, ...);
 
 #endif // RAMFS_UTIL_H

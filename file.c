@@ -96,7 +96,7 @@ int find_filen(const char* caller, const char* path, size_t name_len, struct fil
     if (clock_gettime(CLOCK_MONOTONIC, &end_time))
         return ret;
 
-    ANNOYING_PRINTF("[%s][%s]: Path: \"%.*s\", time: %fus\n", caller, __func__, (int)name_len, name,
+    ANNOYING_PRINTF("[%s][%s]: Path: \"%.*s\", time: %fus\n", caller, __func__, (int)name_len, path,
         (((end_time.tv_sec - start_time.tv_sec) * 1000000000) + (end_time.tv_nsec - start_time.tv_nsec)) / 1000.0);
     return ret;
 }

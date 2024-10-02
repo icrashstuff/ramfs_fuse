@@ -53,3 +53,7 @@ size_t util_dirname_len(const char* path, size_t path_len)
         dir_len++;
     return dir_len;
 }
+
+int util_annoying_prinf_null(const char* fmt, ...) { return 0; }
+
+int (*util_annoying_printf)(const char* fmt, ...) = util_annoying_prinf_null;
