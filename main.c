@@ -367,11 +367,11 @@ static int ramfs_getattr(const char* path, struct stat* st, struct fuse_file_inf
     struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
 
     memset(st, 0, sizeof(struct stat));
-    if (file != NULL || find_file(__func__, path, _root_file, &file))
-        st->st_size = file->file_size;
-    else
+    if (file == NULL && !find_file(__func__, path, _root_file, &file))
         return -ENOENT;
 
+    /* In the future st_size for directories should reflect the size allocated to a child array */
+    st->st_size  = file->file_size;
     st->st_atim  = file->atime;
     st->st_mtim  = file->mtime;
     st->st_ctim  = file->ctime;
@@ -400,12 +400,7 @@ static int ramfs_statx(const char* path, int flags, int mask, struct statx* stx,
     struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
 
     memset(stx, 0, sizeof(struct stat));
-    if (file != NULL || find_file(__func__, path, _root_file, &file))
-    {
-        stx->stx_size = file->file_size;
-        stx->stx_mask |= STATX_SIZE;
-    }
-    else
+    if (file == NULL && !find_file(__func__, path, _root_file, &file))
         return -ENOENT;
 
 #define TIMESPEC_TO_STX(STX_VAR, TS_VAR)  \
@@ -424,7 +419,9 @@ static int ramfs_statx(const char* path, int flags, int mask, struct statx* stx,
     stx->stx_gid   = file->gid;
     stx->stx_mode  = file->mode;
     stx->stx_nlink = file->nlink;
-    stx->stx_mask |= STATX_UID | STATX_GID | STATX_MODE | STATX_NLINK;
+    /* In the future stx_size for directories should reflect the size allocated to a child array */
+    stx->stx_size = file->file_size;
+    stx->stx_mask |= STATX_UID | STATX_GID | STATX_MODE | STATX_NLINK | STATX_SIZE;
 
     /* Not particularly efficient, but works */
     file = file->child;
