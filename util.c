@@ -23,7 +23,7 @@
 #include "util.h"
 #include <string.h>
 
-const char* util_basename(const char* path)
+FUNC_PURE const char* util_basename(const char* path)
 {
     if (path == NULL)
         return ".";
@@ -41,7 +41,7 @@ const char* util_basename(const char* path)
         return ".";
 }
 
-size_t util_dirname_len(const char* path, size_t path_len)
+FUNC_PURE size_t util_dirname_len(const char* path, size_t path_len)
 {
     size_t dir_len = 0;
     for (size_t i = 0; i < path_len; i++)

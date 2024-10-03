@@ -26,6 +26,16 @@
 #include <sys/types.h>
 #include <time.h>
 
+/* Pure functions base their output solely on reading (or dereferencing) their inputs and never accessing global state, I think... - Ian */
+#ifndef FUNC_PURE
+#define FUNC_PURE __attribute__((pure))
+#endif
+
+/* Constant functions are pure functions with additional restrictions (ex. No pointer dereferencing) */
+#ifndef FUNC_CONST
+#define FUNC_CONST __attribute__((const))
+#endif
+
 extern int (*util_annoying_printf)(const char* fmt, ...);
 
 #define ANNOYING_PRINTF(fmt, ...) util_annoying_printf(fmt, ##__VA_ARGS__)
@@ -54,12 +64,12 @@ extern int (*util_annoying_printf)(const char* fmt, ...);
 /**
  * This function is equivalent to GNU basename(3), in that it won't modify path
  */
-const char* util_basename(const char* path);
+FUNC_PURE const char* util_basename(const char* path);
 
 /**
  * Gets the length of the directory part of a path for use in functions like strncmp(3)
  */
-size_t util_dirname_len(const char* path, size_t path_len);
+FUNC_PURE size_t util_dirname_len(const char* path, size_t path_len);
 
 int util_annoying_prinf_null(const char* fmt, ...);
 
