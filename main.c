@@ -73,8 +73,8 @@ static int ramfs_readdir(const char* path, void* buf, fuse_fill_dir_t filler, of
 
     while (cur_file != NULL)
     {
-        if (cur_file->name != NULL)
-            filler(buf, util_basename(cur_file->name), NULL, 0, FUSE_FILL_DIR_DEFAULTS);
+        if (cur_file->basename != NULL)
+            filler(buf, cur_file->basename, NULL, 0, FUSE_FILL_DIR_DEFAULTS);
         cur_file = cur_file->next;
     }
     return 0;
@@ -211,6 +211,9 @@ static int ramfs_rename(const char* oldpath, const char* newpath, unsigned int f
 {
     printf("[%s]: \"%s\"->\"%s\"\n", __func__, oldpath, newpath);
 
+    if ((oldpath != NULL && strcmp(oldpath, "/") == 0) || (newpath != NULL && strcmp(oldpath, "/") == 0))
+        return -EPERM;
+
     size_t oldpath_len     = strlen(oldpath);
     size_t newpath_len     = strlen(newpath);
     size_t oldpath_dir_len = util_dirname_len(oldpath, oldpath_len);
@@ -226,7 +229,7 @@ static int ramfs_rename(const char* oldpath, const char* newpath, unsigned int f
 
     if ((flags & RENAME_EXCHANGE && flags & RENAME_NOREPLACE) || flags & RENAME_WHITEOUT)
         return -EINVAL;
-    if (strcmp(oldpath, _root_file->name) == 0)
+    if (strcmp(oldpath, _root_file->basename) == 0)
         return -EACCES;
 
     if (!find_filen(__func__, oldpath, oldpath_len, _root_file, &old_file))
@@ -252,8 +255,7 @@ static int ramfs_rename(const char* oldpath, const char* newpath, unsigned int f
         if (new_file == NULL)
             return -ENOENT;
 
-        SWAP_VAR(char*, old_file->name, new_file->name);
-        SWAP_VAR(const char*, old_file->basename, new_file->basename);
+        SWAP_VAR(char*, old_file->basename, new_file->basename);
         SWAP_VAR(size_t, old_file->name_buf_size, new_file->name_buf_size);
 
         file_update_times(new_file, FILE_TIME_LEVEL_MODIFY_METADATA);
@@ -497,9 +499,9 @@ static void* ramfs_init(struct fuse_conn_info* conn, struct fuse_config* cfg)
         return NULL;
     }
 
-    fs->root_file->basename = "/";
-    fs->root_file->mode     = S_IFDIR | 0755;
-    fs->root_file->nlink    = 2;
+    fs->root_file->basename[0] = '/';
+    fs->root_file->mode        = S_IFDIR | 0755;
+    fs->root_file->nlink       = 2;
 
     file_create_blank_nodes_for_stress(fs->root_file, 4, 4);
     for (int i = 0; i < 2; i++)

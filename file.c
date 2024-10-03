@@ -207,7 +207,7 @@ int file_free_files(struct file_t* first_file)
         return 0;
     struct file_t* next_file  = first_file->next;
     struct file_t* child_file = first_file->child;
-    FREE(first_file->name);
+    FREE(first_file->basename);
     FREE(first_file->buf);
     FREE(first_file);
     if (child_file != NULL)
@@ -231,7 +231,7 @@ int file_resize_buf(const char* caller, struct file_t* file, size_t req_size)
         else
             size = ((req_size / FILE_BUF_SIZE_ALIGN_HIGH) + 1) * FILE_BUF_SIZE_ALIGN_HIGH;
     }
-    printf("[%s][%s]: Resize \"%s\" size(buf): %zu(%zu)->%zu(%zu)\n", caller, __func__, file->name, file->file_size, file->buf_size, req_size, size);
+    printf("[%s][%s]: Resize \"%s\" size(buf): %zu(%zu)->%zu(%zu)\n", caller, __func__, file->basename, file->file_size, file->buf_size, req_size, size);
 
     if (size == 0)
     {
@@ -263,40 +263,41 @@ int file_resize_buf(const char* caller, struct file_t* file, size_t req_size)
     return 1;
 }
 
-int file_rename(struct file_t* file, const char* new_name)
+int file_rename(struct file_t* file, const char* _new_name)
 {
     if (file == NULL)
         return 0;
-    size_t old_name_len = 0;
-    size_t new_name_len = strlen(new_name) + 1;
-    int    r            = 0;
-    if (file->name != NULL)
+    const char* new_basename = util_basename(_new_name);
+    size_t      old_name_len = 0;
+    size_t      new_name_len = strlen(new_basename) + 1;
+
+    if (file->basename != NULL)
         old_name_len = file->name_buf_size;
 
     if (new_name_len == 0)
     {
-        FREE(file->name);
+        FREE(file->basename);
         file->name_buf_size = 0;
-        r                   = 1;
+        return 1;
     }
     else if (old_name_len < new_name_len)
     {
         char* new_name_buf = calloc(new_name_len, sizeof(char));
-        char* old_name_buf = file->name;
+        char* old_name_buf = file->basename;
         if (new_name_buf == NULL)
             return 0;
-        memcpy(new_name_buf, new_name, new_name_len);
-        file->name = new_name_buf;
+        memcpy(new_name_buf, new_basename, new_name_len);
+        file->basename = new_name_buf;
         FREE(old_name_buf);
-        r = 1;
+        return 1;
     }
     else if (new_name_len < old_name_len)
     {
-        memcpy(file->name, new_name, new_name_len);
-        r = 1;
+        memcpy(file->basename, new_basename, new_name_len);
+        return 1;
     }
-    file->basename = util_basename(file->name);
-    return r;
+
+    return 0;
 }
 
 int file_create(const char* name, struct file_t** file_ptr)
@@ -330,7 +331,7 @@ void file_print_tree(struct file_t* file, long int level)
         else
             putc(' ', stdout);
     }
-    printf("+ \"%s\" \"%s\"\n", file->basename, file->name);
+    printf("+ \"%s\"\n", file->basename);
 
     file_print_tree(file->child, level + 4);
     file_print_tree(file->next, level);
@@ -341,9 +342,9 @@ void file_create_blank_nodes_for_stress(struct file_t* _root_file, uint num_dirs
     struct file_t* f1            = NULL;
     struct file_t* dir           = _root_file;
     int            name_buf_size = 128;
-    char*          name_buf      = calloc(name_buf_size, sizeof(char));
+    char*          fname_buf     = calloc(name_buf_size, sizeof(char));
 
-    if (name_buf == NULL)
+    if (fname_buf == NULL)
     {
         printf("[%s]: Failed to create name buffer\n", __func__);
         return;
@@ -357,13 +358,10 @@ void file_create_blank_nodes_for_stress(struct file_t* _root_file, uint num_dirs
         int sn_ret = 0;
         for (uint k = 0; k < num_files; k++)
         {
-            if (dir != _root_file)
-                sn_ret = snprintf(name_buf, name_buf_size, "%s/file_0x%04X.txt", dir->name, counter_file++);
-            else
-                sn_ret = snprintf(name_buf, name_buf_size, "file_0x%04X.txt", counter_file++);
+            sn_ret = snprintf(fname_buf, name_buf_size, "file_0x%04X.txt", counter_file++);
             if (sn_ret > name_buf_size)
                 continue;
-            if (file_create(name_buf, &f1))
+            if (file_create(fname_buf, &f1))
             {
                 ANNOYING_PRINTF("[%s]: file created, appending...\n", __func__);
                 if (!file_append_file_as_child(dir, f1))
@@ -374,13 +372,10 @@ void file_create_blank_nodes_for_stress(struct file_t* _root_file, uint num_dirs
             }
         }
 
-        if (dir != _root_file)
-            sn_ret = snprintf(name_buf, name_buf_size, "%s/dir_0x%04X", dir->name, counter_dir++);
-        else
-            sn_ret = snprintf(name_buf, name_buf_size, "dir_0x%04X", counter_dir++);
+        sn_ret = snprintf(fname_buf, name_buf_size, "dir_0x%04X", counter_dir++);
         if (sn_ret > name_buf_size)
             continue;
-        if (file_create(name_buf, &f1))
+        if (file_create(fname_buf, &f1))
         {
             ANNOYING_PRINTF("[%s]: directory created, appending...\n", __func__);
             f1->mode &= ~S_IFMT;
@@ -395,5 +390,5 @@ void file_create_blank_nodes_for_stress(struct file_t* _root_file, uint num_dirs
                 dir = f1;
         }
     }
-    FREE(name_buf);
+    FREE(fname_buf);
 }
