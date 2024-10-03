@@ -56,8 +56,9 @@
 
 struct file_t
 {
-    char*  name;
-    size_t name_buf_size;
+    char*       name;
+    const char* basename;
+    size_t      name_buf_size;
 
     struct file_t* parent;
     struct file_t* child;

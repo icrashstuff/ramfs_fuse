@@ -40,6 +40,13 @@ extern int (*util_annoying_printf)(const char* fmt, ...);
 
 #define ANNOYING_PRINTF(fmt, ...) util_annoying_printf(fmt, ##__VA_ARGS__)
 
+#define DEREFERENCE_CRASH()    \
+    do                         \
+    {                          \
+        int* __crash__ = NULL; \
+        *__crash__     = 0;    \
+    } while (0)
+
 #define TIME_BLOCK_START()        \
     struct timespec __start_time; \
     clock_gettime(CLOCK_MONOTONIC, &__start_time);

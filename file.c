@@ -55,27 +55,52 @@ int file_update_times(struct file_t* file, enum file_time_update_level_t level)
 }
 
 /**
- * Finds a file by recursing through the linked list, sets found_file and returns true if name found
+ * Finds a file by recursing through the linked list and examining file_t->basename, sets found_file and returns true if name found
  */
-static int _find_file(size_t recur_level, const char* caller, const char* path, size_t name_len, struct file_t* first_file, struct file_t** found_file)
+static int _find_file_path_aware(size_t recur_level, const char* caller, const char* path_min, size_t path_min_len, const char* path, size_t path_len,
+    struct file_t* first_file, struct file_t** found_file)
 {
-    if (first_file == NULL || path == NULL || found_file == NULL || strlen(path) == 0)
+    if (first_file == NULL || path == NULL || found_file == NULL || path_len == 0)
         return 0;
-    if (first_file->name != NULL && strncmp(first_file->name, path, name_len) == 0 && first_file->name[name_len] == '\0')
+
+#if 0
+    for(size_t i = 0; i < recur_level*2; i++)
+        putc(' ', stdout);
+    printf("\"%s\" \t \"%s\"\n", first_file->name, path_min);
+#endif
+
+    size_t name_len     = 0;
+    size_t name_len_off = 0;
+    for (size_t i = 0; i < path_min_len; i++)
     {
-        printf("[%s][%s]: found file \"%.*s\", level: %zu\n", caller, __func__, (int)name_len, path, recur_level);
+        if (path_min[i] == '/')
+        {
+            name_len = i;
+            i        = path_min_len;
+        }
+    }
+
+    if (name_len == 0 && first_file->basename != NULL && strncmp(first_file->basename, path_min, path_min_len) == 0
+        && first_file->basename[path_min_len] == '\0')
+    {
+        printf("[%s][%s]: %zu found file \"%.*s\", level: %zu\n", caller, __func__, name_len, (int)path_len, path, recur_level);
         *found_file = first_file;
         return 1;
     }
-    if (first_file->child != NULL)
+
+    if ((name_len != 0 && strncmp(first_file->basename, &path_min[name_len_off], name_len) == 0))
     {
-        int ret = _find_file(recur_level + 1, caller, path, name_len, first_file->child, found_file);
-        if (ret != 0)
-            return ret;
+        if (first_file->child != NULL)
+        {
+            int ret = _find_file_path_aware(
+                recur_level + 1, caller, &path_min[name_len + 1], path_min_len - (name_len + 1), path, path_len, first_file->child, found_file);
+            if (ret != 0)
+                return ret;
+        }
     }
-    if (first_file->next != NULL)
+    else if (first_file->next != NULL)
     {
-        int ret = _find_file(recur_level + 1, caller, path, name_len, first_file->next, found_file);
+        int ret = _find_file_path_aware(recur_level, caller, path_min, path_min_len, path, path_len, first_file->next, found_file);
         if (ret != 0)
             return ret;
     }
@@ -84,20 +109,36 @@ static int _find_file(size_t recur_level, const char* caller, const char* path, 
 
 int find_filen(const char* caller, const char* path, size_t name_len, struct file_t* first_file, struct file_t** found_file)
 {
-    struct timespec start_time;
-    if (clock_gettime(CLOCK_MONOTONIC, &start_time))
-        return _find_file(0, caller, path, name_len, first_file, found_file);
+    TIME_BLOCK_START();
+    if (path == NULL)
+        return 0;
+    if (path[0] == '/')
+    {
+        if (name_len == 1)
+        {
+            *found_file = first_file;
+            return 1;
+        }
+        else if (name_len > 1)
+        {
+            path = &path[1];
+            name_len--;
+        }
+    }
+    if (name_len > 0 && path[name_len - 1] == '/')
+        name_len--;
+    if (first_file->child == NULL)
+        return 0;
+    first_file = first_file->child;
 
-    int ret = _find_file(0, caller, path, name_len, first_file, found_file);
+    int ret = _find_file_path_aware(0, caller, path, name_len, path, name_len, first_file, found_file);
     if (ret == 0)
         printf("[%s][%s]: did not find file \"%.*s\"\n", caller, __func__, (int)name_len, path);
 
-    struct timespec end_time;
-    if (clock_gettime(CLOCK_MONOTONIC, &end_time))
-        return ret;
+    double elapsed = 0.0;
+    TIME_BLOCK_END(elapsed);
 
-    ANNOYING_PRINTF("[%s][%s]: Path: \"%.*s\", time: %fus\n", caller, __func__, (int)name_len, path,
-        (((end_time.tv_sec - start_time.tv_sec) * 1000000000) + (end_time.tv_nsec - start_time.tv_nsec)) / 1000.0);
+    printf("[%s][%s]: Path: \"%.*s\", time: %fms\n", caller, __func__, (int)name_len, path, elapsed / 1000.0);
     return ret;
 }
 
@@ -228,6 +269,7 @@ int file_rename(struct file_t* file, const char* new_name)
         return 0;
     size_t old_name_len = 0;
     size_t new_name_len = strlen(new_name) + 1;
+    int    r            = 0;
     if (file->name != NULL)
         old_name_len = file->name_buf_size;
 
@@ -235,7 +277,7 @@ int file_rename(struct file_t* file, const char* new_name)
     {
         FREE(file->name);
         file->name_buf_size = 0;
-        return 1;
+        r                   = 1;
     }
     else if (old_name_len < new_name_len)
     {
@@ -246,14 +288,15 @@ int file_rename(struct file_t* file, const char* new_name)
         memcpy(new_name_buf, new_name, new_name_len);
         file->name = new_name_buf;
         FREE(old_name_buf);
-        return 1;
+        r = 1;
     }
     else if (new_name_len < old_name_len)
     {
         memcpy(file->name, new_name, new_name_len);
-        return 1;
+        r = 1;
     }
-    return 0;
+    file->basename = util_basename(file->name);
+    return r;
 }
 
 int file_create(const char* name, struct file_t** file_ptr)
@@ -287,7 +330,7 @@ void file_print_tree(struct file_t* file, long int level)
         else
             putc(' ', stdout);
     }
-    printf("+ \"%s\"\n", file->name);
+    printf("+ \"%s\" \"%s\"\n", file->basename, file->name);
 
     file_print_tree(file->child, level + 4);
     file_print_tree(file->next, level);
@@ -297,7 +340,7 @@ void file_create_blank_nodes_for_stress(struct file_t* _root_file, uint num_dirs
 {
     struct file_t* f1            = NULL;
     struct file_t* dir           = _root_file;
-    size_t         name_buf_size = 128;
+    int            name_buf_size = 128;
     char*          name_buf      = calloc(name_buf_size, sizeof(char));
 
     if (name_buf == NULL)
@@ -311,12 +354,15 @@ void file_create_blank_nodes_for_stress(struct file_t* _root_file, uint num_dirs
 
     for (uint j = 0; j < num_dirs; j++)
     {
+        int sn_ret = 0;
         for (uint k = 0; k < num_files; k++)
         {
             if (dir != _root_file)
-                snprintf(name_buf, name_buf_size, "%s/file_0x%04X.txt", dir->name, counter_file++);
+                sn_ret = snprintf(name_buf, name_buf_size, "%s/file_0x%04X.txt", dir->name, counter_file++);
             else
-                snprintf(name_buf, name_buf_size, "%sfile_0x%04X.txt", dir->name, counter_file++);
+                sn_ret = snprintf(name_buf, name_buf_size, "file_0x%04X.txt", counter_file++);
+            if (sn_ret > name_buf_size)
+                continue;
             if (file_create(name_buf, &f1))
             {
                 ANNOYING_PRINTF("[%s]: file created, appending...\n", __func__);
@@ -329,10 +375,11 @@ void file_create_blank_nodes_for_stress(struct file_t* _root_file, uint num_dirs
         }
 
         if (dir != _root_file)
-            snprintf(name_buf, name_buf_size, "%s/dir_0x%04X", dir->name, counter_dir++);
+            sn_ret = snprintf(name_buf, name_buf_size, "%s/dir_0x%04X", dir->name, counter_dir++);
         else
-            snprintf(name_buf, name_buf_size, "%sdir_0x%04X", dir->name, counter_dir++);
-
+            sn_ret = snprintf(name_buf, name_buf_size, "dir_0x%04X", counter_dir++);
+        if (sn_ret > name_buf_size)
+            continue;
         if (file_create(name_buf, &f1))
         {
             ANNOYING_PRINTF("[%s]: directory created, appending...\n", __func__);
