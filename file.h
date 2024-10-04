@@ -27,42 +27,36 @@
 #include <sys/types.h>
 #include <time.h>
 
-#ifndef FILE_BUF_SIZE_ALIGN_HIGH
-#define FILE_BUF_SIZE_ALIGN_HIGH 4096
+#ifndef INODE_BUF_SIZE_ALIGN_HIGH
+#define INODE_BUF_SIZE_ALIGN_HIGH 4096
 #endif
 
-/* This overrides FILE_BUF_SIZE_ALIGN_HIGH when req_size is less than FILE_BUF_SIZE_ALIGN_HIGH */
-#ifndef FILE_BUF_SIZE_ALIGN_MID
-#define FILE_BUF_SIZE_ALIGN_MID 256
+/* This overrides INODE_BUF_SIZE_ALIGN_HIGH when req_size is less than INODE_BUF_SIZE_ALIGN_HIGH */
+#ifndef INODE_BUF_SIZE_ALIGN_MID
+#define INODE_BUF_SIZE_ALIGN_MID 256
 #endif
 
-/* This overrides FILE_BUF_SIZE_ALIGN_MID when req_size is less than FILE_BUF_SIZE_ALIGN_MID */
-#ifndef FILE_BUF_SIZE_ALIGN_LOW
-#define FILE_BUF_SIZE_ALIGN_LOW 64
+/* This overrides INODE_BUF_SIZE_ALIGN_MID when req_size is less than INODE_BUF_SIZE_ALIGN_MID */
+#ifndef INODE_BUF_SIZE_ALIGN_LOW
+#define INODE_BUF_SIZE_ALIGN_LOW 64
 #endif
 
 /* When the buffer is below this percentage, shrink the buffer */
-#ifndef FILE_BUF_SIZE_SHRINK_PERCENTAGE
-#define FILE_BUF_SIZE_SHRINK_PERCENTAGE 50
+#ifndef INODE_BUF_SIZE_SHRINK_PERCENTAGE
+#define INODE_BUF_SIZE_SHRINK_PERCENTAGE 50
 #endif
 
-#if FILE_BUF_SIZE_ALIGN_MID > FILE_BUF_SIZE_ALIGN_HIGH
-#error "FILE_BUF_SIZE_ALIGN_MID cannot be greater than FILE_BUF_SIZE_ALIGN_HIGH"
+#if INODE_BUF_SIZE_ALIGN_MID > INODE_BUF_SIZE_ALIGN_HIGH
+#error "INODE_BUF_SIZE_ALIGN_MID cannot be greater than INODE_BUF_SIZE_ALIGN_HIGH"
 #endif
 
-#if FILE_BUF_SIZE_ALIGN_LOW > FILE_BUF_SIZE_ALIGN_MID
-#error "FILE_BUF_SIZE_ALIGN_LOW cannot be greater than FILE_BUF_SIZE_ALIGN_MID"
+#if INODE_BUF_SIZE_ALIGN_LOW > INODE_BUF_SIZE_ALIGN_MID
+#error "INODE_BUF_SIZE_ALIGN_LOW cannot be greater than INODE_BUF_SIZE_ALIGN_MID"
 #endif
 
-struct file_t
+struct inode_t
 {
-    char*       basename;
-    size_t      name_buf_size;
-
-    struct file_t* parent;
-    struct file_t* child;
-    struct file_t* prev;
-    struct file_t* next;
+    size_t inode_num;
 
     size_t buf_size;
     size_t file_size;
@@ -80,7 +74,7 @@ struct file_t
     struct timespec ctime;
     /** Content Modification time */
     struct timespec mtime;
-    /** File_t creation time (should not be changed) */
+    /** inode_t creation time (should not be changed) */
     struct timespec btime;
 
     uid_t uid;
@@ -88,113 +82,129 @@ struct file_t
 
     mode_t mode;
     /**
-     * Number of hard links to file, in the case of directories there is the . directory which increases the value to 1
+     * Number of hard links to inode, in the case of directories there is the . directory which increases the value to 1
      * If nlink and refs both hit 0, then delete (this will be important when and if hardlinks are implemented)
      */
     nlink_t nlink;
     /**
-     * Number of unreleased open() calls to the files
-     * If nlink and refs both hit 0, then the file can be deleted (this will be important when and if hardlinks are implemented)
+     * Number of unreleased open() calls to the inode
+     * If nlink and refs both hit 0, then the inode can be deleted (this will be important when and if hardlinks are implemented)
      */
     size_t nrefs;
 };
 
+struct lookup_t
+{
+    char*  basename;
+    size_t name_buf_size;
+
+    struct lookup_t* parent;
+    struct lookup_t* child;
+    struct lookup_t* prev;
+    struct lookup_t* next;
+
+    /** inode_ptr must ALWAYS be a valid pointer */
+    struct inode_t* inode_ptr;
+};
+
 struct filesystem_t
 {
-    struct file_t* root_file;
+    struct lookup_t* root_lookup;
 };
 
 /**
- * Values that control which time fields will be updated by file_update_times
+ * Values that control which time fields will be updated by inode_update_times
  */
-enum file_time_update_level_t
+enum inode_time_update_level_t
 {
-    FILE_TIME_LEVEL_ACCESS          = 0,
-    FILE_TIME_LEVEL_MODIFY_METADATA = 1,
-    FILE_TIME_LEVEL_MODIFY_CONTENTS = 2,
-    FILE_TIME_LEVEL_CREATION        = 3,
+    INODE_TIME_LEVEL_ACCESS          = 0,
+    INODE_TIME_LEVEL_MODIFY_METADATA = 1,
+    INODE_TIME_LEVEL_MODIFY_CONTENTS = 2,
+    INODE_TIME_LEVEL_CREATION        = 3,
 };
 
 /**
- * Helper function to update appropriate file times
+ * Helper function to update appropriate inode times
  *
  * Returns 1 on success and 0 on failure
  */
-int file_update_times(struct file_t* file, enum file_time_update_level_t level);
+int inode_update_times(struct inode_t* inode, enum inode_time_update_level_t level);
 
 /**
- * Finds first file with name matching path limited to name_len if it were as long as name_len in first_file structure
+ * Finds first lookup with name matching path limited to name_len if it were as long as name_len in first_lookup structure
  *
  * Returns 1 on success and 0 on failure
  */
-int find_filen(const char* caller, const char* path, size_t name_len, struct file_t* first_file, struct file_t** found_file);
+int find_lookupn(const char* caller, const char* path, size_t name_len, struct lookup_t* first_lookup, struct lookup_t** found_lookup);
 
 /**
- * Finds first file with name matching path in first_file structure
+ * Finds first lookup with name matching path in first_lookup structure
  *
  * Returns 1 on success and 0 on failure
  */
-int find_file(const char* caller, const char* path, struct file_t* first_file, struct file_t** found_file);
+int find_lookup(const char* caller, const char* path, struct lookup_t* first_lookup, struct lookup_t** found_lookup);
 
 /**
- * Appends new_file to the end of the current level list of first_file
+ * Appends new_lookup to the end of the current level list of first_lookup
  *
  * Returns 1 on success and 0 on failure
  */
-int file_append_file(struct file_t* first_file, struct file_t* new_file);
+int lookup_append_lookup_as_next(struct lookup_t* first_lookup, struct lookup_t* new_lookup);
 
 /**
- * Appends new_file to the end of the child list of parent_file
+ * Appends new_lookup to the end of the child list of parent_file
  *
  * Returns 1 on success and 0 on failure
  */
-int file_append_file_as_child(struct file_t* parent_file, struct file_t* new_file);
+int lookup_append_lookup_as_child(struct lookup_t* parent_lookup, struct lookup_t* new_lookup);
 
 /**
- * Removes a file from the a file_t linked list
+ * Removes a lookup from the a lookup_t linked list
  *
  * Returns 1 on success and 0 on failure
  */
-int file_remove_file(struct file_t* file);
+int lookup_pluck_lookup(struct lookup_t* lookup);
 
 /**
- * Frees a file, its children, and all following file_t->next entries
+ * Frees a lookup, its children, and all following lookup_t->next entries
+ *
+ * Also frees the underlying inode
  *
  * Returns 1 on success and 0 on failure
  */
-int file_free_files(struct file_t* first_file);
+int lookup_free_lookups(struct lookup_t* first_lookup);
 
 /**
  * Resizes the buffer to at least req_size and changes the file_size to req_size
  *
  * Returns 1 on success and 0 on failure
  */
-int file_resize_buf(const char* caller, struct file_t* file, size_t req_size);
+int inode_resize_buf(const char* caller, struct inode_t* inode, size_t req_size);
 
 /**
- * Renames a file, this may involve reallocating file->name if the new name is longer
+ * Renames a lookup, this may involve reallocating lookup_t->name if the new name is longer
  *
  * Returns 1 on success and 0 on failure
  */
-int file_rename(struct file_t* file, const char* new_name);
+int lookup_rename(struct lookup_t* lookup, const char* new_name);
 
 /**
- * Creates a file_t object and assigns the pointer at *file_ptr
+ * Creates a lookup_t object and assigns the pointer at *lookup_ptr
  *
  * Returns 1 on success and 0 on failure
  */
-int file_create(const char* name, struct file_t** file_ptr);
+int lookup_create(const char* name, struct lookup_t** lookup_ptr);
 
 /**
- * Prints a tree(1)-like view of a file_t structure
+ * Prints a tree(1)-like view of a lookup_t structure
  */
-void file_print_tree(struct file_t* file, long int level);
+void lookup_print_tree(struct lookup_t* lookup, long int level);
 
 /**
  * This is only meant to be used when initializing the filesystem
  *
  * Warning: This function is not thread safe as it relies on a static variable
  */
-void file_create_blank_nodes_for_stress(struct file_t* _root_file, uint num_dirs, uint num_files);
+void lookup_create_blank_nodes_for_stress(struct lookup_t* _root_lookup, uint num_dirs, uint num_files);
 
 #endif // RAMFS_FILE_H

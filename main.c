@@ -56,26 +56,26 @@ static int ramfs_readdir(const char* path, void* buf, fuse_fill_dir_t filler, of
 {
     printf("[%s:%d]: Path: \"%s\"\n", __func__, __LINE__, path);
 
-    struct file_t* cur_file   = fi == NULL ? NULL : ((struct file_t*)fi->fh);
-    struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
-    if (cur_file == NULL && !find_file(__func__, path, _root_file, &cur_file))
+    struct lookup_t* cur_lookup   = fi == NULL ? NULL : ((struct lookup_t*)fi->fh);
+    struct lookup_t* _root_lookup = get_filesytem_from_fuse_context()->root_lookup;
+    if (cur_lookup == NULL && !find_lookup(__func__, path, _root_lookup, &cur_lookup))
         return -ENOENT;
 
-    if (!(cur_file->mode & S_IFDIR))
+    if (!(cur_lookup->inode_ptr->mode & S_IFDIR))
         return -ENOTDIR;
 
     filler(buf, ".", NULL, 0, FUSE_FILL_DIR_DEFAULTS);
     filler(buf, "..", NULL, 0, FUSE_FILL_DIR_DEFAULTS);
 
-    if (cur_file->child == NULL)
+    if (cur_lookup->child == NULL)
         return 0;
-    cur_file = cur_file->child;
+    cur_lookup = cur_lookup->child;
 
-    while (cur_file != NULL)
+    while (cur_lookup != NULL)
     {
-        if (cur_file->basename != NULL)
-            filler(buf, cur_file->basename, NULL, 0, FUSE_FILL_DIR_DEFAULTS);
-        cur_file = cur_file->next;
+        if (cur_lookup->basename != NULL)
+            filler(buf, cur_lookup->basename, NULL, 0, FUSE_FILL_DIR_DEFAULTS);
+        cur_lookup = cur_lookup->next;
     }
     return 0;
 }
@@ -85,12 +85,12 @@ static int ramfs_open(const char* path, struct fuse_file_info* fi)
 {
     ANNOYING_PRINTF("[%s]: Path: \"%s\"\n", __func__, path);
 
-    struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
-    if (find_file(__func__, path, _root_file, (struct file_t**)&fi->fh))
+    struct lookup_t* _root_lookup = get_filesytem_from_fuse_context()->root_lookup;
+    if (find_lookup(__func__, path, _root_lookup, (struct lookup_t**)&fi->fh))
     {
-        if (((struct file_t*)fi->fh)->mode & S_IFDIR)
+        if (((struct lookup_t*)fi->fh)->inode_ptr->mode & S_IFDIR)
             return -EISDIR;
-        ((struct file_t*)fi->fh)->nrefs++;
+        ((struct lookup_t*)fi->fh)->inode_ptr->nrefs++;
     }
     else
     {
@@ -107,21 +107,21 @@ static int ramfs_read(const char* path, char* buf, size_t size, off_t _offset, s
 {
     printf("[%s]: Path: \"%s\"\n", __func__, path);
 
-    struct file_t* file       = fi == NULL ? NULL : ((struct file_t*)fi->fh);
-    struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
-    if (file == NULL && !find_file(__func__, path, _root_file, &file))
+    struct lookup_t* lookup       = fi == NULL ? NULL : ((struct lookup_t*)fi->fh);
+    struct lookup_t* _root_lookup = get_filesytem_from_fuse_context()->root_lookup;
+    if (lookup == NULL && !find_lookup(__func__, path, _root_lookup, &lookup))
         return -ENOENT;
-    if (file->mode & S_IFDIR)
+    if (lookup->inode_ptr->mode & S_IFDIR)
         return -EISDIR;
 
-    file_update_times(file, FILE_TIME_LEVEL_ACCESS);
+    inode_update_times(lookup->inode_ptr, INODE_TIME_LEVEL_ACCESS);
 
     size_t offset = _offset;
-    if (offset < file->file_size && file->buf != NULL)
+    if (offset < lookup->inode_ptr->file_size && lookup->inode_ptr->buf != NULL)
     {
-        if (offset + size > file->file_size)
-            size = file->file_size - offset;
-        memcpy(buf, &file->buf[offset], size);
+        if (offset + size > lookup->inode_ptr->file_size)
+            size = lookup->inode_ptr->file_size - offset;
+        memcpy(buf, &lookup->inode_ptr->buf[offset], size);
         return size;
     }
     else
@@ -133,30 +133,31 @@ static int ramfs_mknod(const char* path, mode_t mode, dev_t rdev)
     printf("[%s]: Path: \"%s\"\n", __func__, path);
     if (path == NULL)
         return -EIO;
-    struct file_t* file;
-    struct file_t* dir_file;
-    struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
+
+    struct lookup_t* lookup;
+    struct lookup_t* dir_lookup;
+    struct lookup_t* _root_lookup = get_filesytem_from_fuse_context()->root_lookup;
 
     size_t path_len = strlen(path);
     size_t dir_len  = util_dirname_len(path, path_len);
 
     printf("[%s]: Dir: \"%.*s\"\n", __func__, (int)dir_len, path);
 
-    if (!find_filen(__func__, path, dir_len, _root_file, &dir_file))
+    if (!find_lookupn(__func__, path, dir_len, _root_lookup, &dir_lookup))
         return -ENOENT;
-    if (!(dir_file->mode & S_IFDIR))
+    if (!(dir_lookup->inode_ptr->mode & S_IFDIR))
         return -ENOTDIR;
-    if (find_filen(__func__, path, path_len, _root_file, &file))
+    if (find_lookupn(__func__, path, path_len, _root_lookup, &lookup))
         return -EEXIST;
-    struct file_t* f1;
-    if (!file_create(path, &f1))
+    struct lookup_t* l1;
+    if (!lookup_create(path, &l1))
         return -ENOSPC;
 
     printf("[%s]: file created, appending...\n", __func__);
-    if (!file_append_file_as_child(dir_file, f1))
+    if (!lookup_append_lookup_as_child(dir_lookup, l1))
     {
         printf("[%s]: appending failed, free file\n", __func__);
-        file_free_files(f1);
+        lookup_free_lookups(l1);
         return -EIO;
     }
     return 0;
@@ -165,17 +166,17 @@ static int ramfs_mknod(const char* path, mode_t mode, dev_t rdev)
 static int ramfs_unlink(const char* path)
 {
     printf("[%s]: Path: \"%s\"\n", __func__, path);
-    struct file_t* file       = NULL;
-    struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
-    if (file != NULL || find_file(__func__, path, _root_file, &file))
+    struct lookup_t* lookup       = NULL;
+    struct lookup_t* _root_lookup = get_filesytem_from_fuse_context()->root_lookup;
+    if (lookup != NULL || find_lookup(__func__, path, _root_lookup, &lookup))
     {
-        if (file->mode & S_IFDIR)
+        if (lookup->inode_ptr->mode & S_IFDIR)
             return -EISDIR;
-        if (--file->nlink > 0)
+        if (--lookup->inode_ptr->nlink > 0)
             return 0;
-        if (!file_remove_file(file))
+        if (!lookup_pluck_lookup(lookup))
             return -EIO;
-        if (file->nrefs == 0 && !file_free_files(file))
+        if (lookup->inode_ptr->nrefs == 0 && !lookup_free_lookups(lookup))
             return -EIO;
         return 0;
     }
@@ -186,15 +187,15 @@ static int ramfs_unlink(const char* path)
 static int ramfs_release(const char* path, struct fuse_file_info* fi)
 {
     printf("[%s]: Path: \"%s\"\n", __func__, path);
-    struct file_t* file = (struct file_t*)fi->fh;
-    if (file == NULL)
+    struct lookup_t* lookup = (struct lookup_t*)fi->fh;
+    if (lookup == NULL)
         return 0;
-    file->nrefs--;
+    lookup->inode_ptr->nrefs--;
 
-    if (file->nlink > 0 || file->nrefs > 0)
+    if (lookup->inode_ptr->nlink > 0 || lookup->inode_ptr->nrefs > 0)
         return 0;
-    file_remove_file(file); /* Make sure file is removed from a list */
-    file_free_files(file);
+    lookup_pluck_lookup(lookup); /* Make doubly sure that the lookup is removed from the list */
+    lookup_free_lookups(lookup);
 
     return 0;
 }
@@ -223,67 +224,66 @@ static int ramfs_rename(const char* oldpath, const char* newpath, unsigned int f
     if (oldpath_dir_len != newpath_dir_len && strncmp(oldpath, newpath, oldpath_len))
         return -EINVAL;
 
-    struct file_t* old_file   = NULL;
-    struct file_t* new_file   = NULL;
-    struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
+    struct lookup_t* old_lookup   = NULL;
+    struct lookup_t* new_lookup   = NULL;
+    struct lookup_t* _root_lookup = get_filesytem_from_fuse_context()->root_lookup;
 
     if ((flags & RENAME_EXCHANGE && flags & RENAME_NOREPLACE) || flags & RENAME_WHITEOUT)
         return -EINVAL;
-    if (strcmp(oldpath, _root_file->basename) == 0)
+    if (strcmp(oldpath, _root_lookup->basename) == 0)
         return -EACCES;
 
-    if (!find_filen(__func__, oldpath, oldpath_len, _root_file, &old_file))
+    if (!find_lookupn(__func__, oldpath, oldpath_len, _root_lookup, &old_lookup))
         return -ENOENT;
-    find_filen(__func__, newpath, newpath_len, _root_file, &new_file);
+    find_lookupn(__func__, newpath, newpath_len, _root_lookup, &new_lookup);
 
     /* Temporary check to disable directory renaming */
-    if (old_file->mode & S_IFDIR)
+    if (old_lookup->inode_ptr->mode & S_IFDIR)
         return -EINVAL;
-    if (new_file != NULL && new_file->mode & S_IFDIR)
+    if (new_lookup != NULL && new_lookup->inode_ptr->mode & S_IFDIR)
         return -EINVAL;
 
-    if (flags & RENAME_NOREPLACE && new_file != NULL)
+    if (flags & RENAME_NOREPLACE && new_lookup != NULL)
     {
-        if (new_file != NULL)
+        if (new_lookup != NULL)
             return -EEXIST;
 
-        if (!file_rename(old_file, newpath))
+        if (!lookup_rename(old_lookup, newpath))
             return -ENOMEM;
     }
     else if (flags & RENAME_EXCHANGE)
     {
-        if (new_file == NULL)
+        if (new_lookup == NULL)
             return -ENOENT;
 
-        SWAP_VAR(char*, old_file->basename, new_file->basename);
-        SWAP_VAR(size_t, old_file->name_buf_size, new_file->name_buf_size);
+        SWAP_VAR(struct inode_t*, old_lookup->inode_ptr, new_lookup->inode_ptr);
 
-        file_update_times(new_file, FILE_TIME_LEVEL_MODIFY_METADATA);
+        inode_update_times(new_lookup->inode_ptr, INODE_TIME_LEVEL_MODIFY_METADATA);
     }
     else
     {
-        if (!file_rename(old_file, newpath))
+        if (!lookup_rename(old_lookup, newpath))
             return -ENOMEM;
-        if (new_file != NULL)
-            if (file_remove_file(new_file) && --new_file->nlink > 0 && --new_file->nrefs > 0)
-                file_free_files(new_file);
+        if (new_lookup != NULL)
+            if (lookup_pluck_lookup(new_lookup) && --new_lookup->inode_ptr->nlink > 0 && --new_lookup->inode_ptr->nrefs > 0)
+                lookup_free_lookups(new_lookup);
     }
-    file_update_times(old_file, FILE_TIME_LEVEL_MODIFY_METADATA);
+    inode_update_times(old_lookup->inode_ptr, INODE_TIME_LEVEL_MODIFY_METADATA);
     return 0;
 }
 
 static int ramfs_truncate(const char* path, off_t size, struct fuse_file_info* fi)
 {
-    struct file_t* file       = fi == NULL ? NULL : ((struct file_t*)fi->fh);
-    struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
+    struct lookup_t* lookup       = fi == NULL ? NULL : ((struct lookup_t*)fi->fh);
+    struct lookup_t* _root_lookup = get_filesytem_from_fuse_context()->root_lookup;
 
-    if (file != NULL || find_file(__func__, path, _root_file, &file))
+    if (lookup != NULL || find_lookup(__func__, path, _root_lookup, &lookup))
     {
-        if (file->mode & S_IFDIR)
+        if (lookup->inode_ptr->mode & S_IFDIR)
             return -EISDIR;
-        if (!file_resize_buf(__func__, file, size))
+        if (!inode_resize_buf(__func__, lookup->inode_ptr, size))
             return -ENOSPC;
-        file_update_times(file, FILE_TIME_LEVEL_MODIFY_CONTENTS);
+        inode_update_times(lookup->inode_ptr, INODE_TIME_LEVEL_MODIFY_CONTENTS);
         return 0;
     }
     else
@@ -294,21 +294,21 @@ static int ramfs_write(const char* path, const char* buf, size_t size, off_t off
 {
     printf("[%s]: Path: \"%s\", %d\n", __func__, path, (fi->flags & O_ACCMODE));
     (void)fi;
-    struct file_t* file       = fi == NULL ? NULL : ((struct file_t*)fi->fh);
-    struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
+    struct lookup_t* lookup       = fi == NULL ? NULL : ((struct lookup_t*)fi->fh);
+    struct lookup_t* _root_lookup = get_filesytem_from_fuse_context()->root_lookup;
 
-    if ((file != NULL || find_file(__func__, path, _root_file, &file)))
+    if ((lookup != NULL || find_lookup(__func__, path, _root_lookup, &lookup)))
     {
-        if (file->mode & S_IFDIR)
+        if (lookup->inode_ptr->mode & S_IFDIR)
             return -EISDIR;
         size_t msize = size + off;
         if (size == 0)
             return 0;
-        if (!file_resize_buf(__func__, file, msize))
+        if (!inode_resize_buf(__func__, lookup->inode_ptr, msize))
             return -ENOSPC;
-        file_update_times(file, FILE_TIME_LEVEL_MODIFY_CONTENTS);
-        memcpy(file->buf + off, buf, size);
-        file->file_size = msize;
+        inode_update_times(lookup->inode_ptr, INODE_TIME_LEVEL_MODIFY_CONTENTS);
+        memcpy(lookup->inode_ptr->buf + off, buf, size);
+        lookup->inode_ptr->file_size = msize;
         return size;
     }
     else
@@ -322,18 +322,18 @@ static int ramfs_symlink(const char* target, const char* linkname)
     if (ret != 0)
         return ret;
 
-    struct file_t* file       = NULL;
-    struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
-    if (find_file(__func__, linkname, _root_file, &file))
+    struct lookup_t* lookup       = NULL;
+    struct lookup_t* _root_lookup = get_filesytem_from_fuse_context()->root_lookup;
+    if (find_lookup(__func__, linkname, _root_lookup, &lookup))
     {
-        file->mode -= S_IFREG;
-        file->mode |= S_IFLNK;
+        lookup->inode_ptr->mode -= S_IFREG;
+        lookup->inode_ptr->mode |= S_IFLNK;
         struct fuse_file_info fi;
         memset(&fi, 0, sizeof(struct fuse_file_info));
-        fi.fh = (uint64_t)file;
+        fi.fh = (uint64_t)lookup;
         ramfs_write(linkname, target, strlen(target), 0, &fi);
-        ANNOYING_PRINTF("[%s]: Link: \"%s\", file size: %zu\n", __func__, linkname, file->file_size);
-        ANNOYING_PRINTF("[%s]: Link: \"%s\", contents: %s\n", __func__, linkname, file->buf);
+        ANNOYING_PRINTF("[%s]: Link: \"%s\", file size: %zu\n", __func__, linkname, lookup->inode_ptr->file_size);
+        ANNOYING_PRINTF("[%s]: Link: \"%s\", contents: %s\n", __func__, linkname, lookup->inode_ptr->buf);
         return 0;
     }
     return -EIO;
@@ -342,20 +342,20 @@ static int ramfs_symlink(const char* target, const char* linkname)
 static int ramfs_readlink(const char* path, char* buf, size_t buf_size)
 {
     printf("[%s]: Path: \"%s\", buf_size: %zu\n", __func__, path, buf_size);
-    struct file_t* file       = NULL;
-    struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
-    if (!find_file(__func__, path, _root_file, &file))
+    struct lookup_t* lookup       = NULL;
+    struct lookup_t* _root_lookup = get_filesytem_from_fuse_context()->root_lookup;
+    if (!find_lookup(__func__, path, _root_lookup, &lookup))
         return -ENOENT;
-    if (!(file->mode & S_IFLNK))
+    if (!(lookup->inode_ptr->mode & S_IFLNK))
         return -EINVAL;
 
-    if (file->buf != NULL)
+    if (lookup->inode_ptr->buf != NULL)
     {
-        file_update_times(file, FILE_TIME_LEVEL_ACCESS);
-        size_t size = file->file_size;
+        inode_update_times(lookup->inode_ptr, INODE_TIME_LEVEL_ACCESS);
+        size_t size = lookup->inode_ptr->file_size;
         if ((buf_size - 1) < size)
             size = buf_size - 1;
-        memcpy(buf, file->buf, size);
+        memcpy(buf, lookup->inode_ptr->buf, size);
         buf[size] = 0;
         return 0;
     }
@@ -366,10 +366,10 @@ static int ramfs_readlink(const char* path, char* buf, size_t buf_size)
 static int ramfs_utimens(const char* path, const struct timespec tv[2], struct fuse_file_info* fi)
 {
     ANNOYING_PRINTF("[%s]: Path: \"%s\"\n", __func__, path);
-    struct file_t* file       = fi == NULL ? NULL : ((struct file_t*)fi->fh);
-    struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
+    struct lookup_t* lookup       = fi == NULL ? NULL : ((struct lookup_t*)fi->fh);
+    struct lookup_t* _root_lookup = get_filesytem_from_fuse_context()->root_lookup;
 
-    if (file == NULL && !find_file(__func__, path, _root_file, &file))
+    if (lookup == NULL && !find_lookup(__func__, path, _root_lookup, &lookup))
         return -ENOENT;
 
     struct timespec tv_access = tv[0];
@@ -387,44 +387,44 @@ static int ramfs_utimens(const char* path, const struct timespec tv[2], struct f
     if (tv_modify.tv_nsec == UTIME_NOW)
         tv_modify = t;
     if (tv_access.tv_nsec == UTIME_OMIT)
-        tv_access = file->atime;
+        tv_access = lookup->inode_ptr->atime;
     if (tv_modify.tv_nsec == UTIME_OMIT)
-        tv_modify = file->mtime;
+        tv_modify = lookup->inode_ptr->mtime;
 
-    file->atime = tv_access;
-    file->ctime = tv_modify;
+    lookup->inode_ptr->atime = tv_access;
+    lookup->inode_ptr->ctime = tv_modify;
 
-    file_update_times(file, FILE_TIME_LEVEL_MODIFY_METADATA);
+    inode_update_times(lookup->inode_ptr, INODE_TIME_LEVEL_MODIFY_METADATA);
     return 0;
 }
 
 static int ramfs_getattr(const char* path, struct stat* st, struct fuse_file_info* fi)
 {
     ANNOYING_PRINTF("[%s]: Path: \"%s\"\n", __func__, path);
-    struct file_t* file       = fi == NULL ? NULL : ((struct file_t*)fi->fh);
-    struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
+    struct lookup_t* lookup       = fi == NULL ? NULL : ((struct lookup_t*)fi->fh);
+    struct lookup_t* _root_lookup = get_filesytem_from_fuse_context()->root_lookup;
 
     memset(st, 0, sizeof(struct stat));
-    if (file == NULL && !find_file(__func__, path, _root_file, &file))
+    if (lookup == NULL && !find_lookup(__func__, path, _root_lookup, &lookup))
         return -ENOENT;
 
     /* In the future st_size for directories should reflect the size allocated to a child array */
-    st->st_size  = file->file_size;
-    st->st_atim  = file->atime;
-    st->st_mtim  = file->mtime;
-    st->st_ctim  = file->ctime;
-    st->st_uid   = file->uid;
-    st->st_gid   = file->gid;
-    st->st_mode  = file->mode;
-    st->st_nlink = file->nlink;
+    st->st_size  = lookup->inode_ptr->file_size;
+    st->st_atim  = lookup->inode_ptr->atime;
+    st->st_mtim  = lookup->inode_ptr->mtime;
+    st->st_ctim  = lookup->inode_ptr->ctime;
+    st->st_uid   = lookup->inode_ptr->uid;
+    st->st_gid   = lookup->inode_ptr->gid;
+    st->st_mode  = lookup->inode_ptr->mode;
+    st->st_nlink = lookup->inode_ptr->nlink;
 
     /* Not particularly efficient, but works */
-    file = file->child;
-    while (file != NULL)
+    lookup = lookup->child;
+    while (lookup != NULL)
     {
-        if (file->mode & S_IFDIR)
+        if (lookup->inode_ptr->mode & S_IFDIR)
             st->st_nlink++; /* Subdirs containing ".." count as hardlinks */
-        file = file->next;
+        lookup = lookup->next;
     }
     return 0;
 }
@@ -434,11 +434,11 @@ static int ramfs_statx(const char* path, int flags, int mask, struct statx* stx,
 {
     ANNOYING_PRINTF("[%s]: Path: \"%s\"\n", __func__, path);
     ANNOYING_PRINTF("[%s]: flags %d\n", __func__, flags);
-    struct file_t* file       = fi == NULL ? NULL : ((struct file_t*)fi->fh);
-    struct file_t* _root_file = get_filesytem_from_fuse_context()->root_file;
+    struct lookup_t* lookup       = fi == NULL ? NULL : ((struct lookup_t*)fi->fh);
+    struct lookup_t* _root_lookup = get_filesytem_from_fuse_context()->root_lookup;
 
     memset(stx, 0, sizeof(struct stat));
-    if (file == NULL && !find_file(__func__, path, _root_file, &file))
+    if (lookup == NULL && !find_lookup(__func__, path, _root_lookup, &lookup))
         return -ENOENT;
 
 #define TIMESPEC_TO_STX(STX_VAR, TS_VAR)  \
@@ -447,27 +447,27 @@ static int ramfs_statx(const char* path, int flags, int mask, struct statx* stx,
         STX_VAR.tv_sec  = TS_VAR.tv_sec;  \
         STX_VAR.tv_nsec = TS_VAR.tv_nsec; \
     } while (0)
-    TIMESPEC_TO_STX(stx->stx_atime, file->atime);
-    TIMESPEC_TO_STX(stx->stx_mtime, file->mtime);
-    TIMESPEC_TO_STX(stx->stx_ctime, file->ctime);
-    TIMESPEC_TO_STX(stx->stx_btime, file->btime);
+    TIMESPEC_TO_STX(stx->stx_atime, lookup->inode_ptr->atime);
+    TIMESPEC_TO_STX(stx->stx_mtime, lookup->inode_ptr->mtime);
+    TIMESPEC_TO_STX(stx->stx_ctime, lookup->inode_ptr->ctime);
+    TIMESPEC_TO_STX(stx->stx_btime, lookup->inode_ptr->btime);
     stx->stx_mask |= STATX_ATIME | STATX_MTIME | STATX_CTIME | STATX_BTIME;
 #undef TIMESPEC_TO_STX
-    stx->stx_uid   = file->uid;
-    stx->stx_gid   = file->gid;
-    stx->stx_mode  = file->mode;
-    stx->stx_nlink = file->nlink;
+    stx->stx_uid   = lookup->inode_ptr->uid;
+    stx->stx_gid   = lookup->inode_ptr->gid;
+    stx->stx_mode  = lookup->inode_ptr->mode;
+    stx->stx_nlink = lookup->inode_ptr->nlink;
     /* In the future stx_size for directories should reflect the size allocated to a child array */
-    stx->stx_size = file->file_size;
+    stx->stx_size = lookup->inode_ptr->file_size;
     stx->stx_mask |= STATX_UID | STATX_GID | STATX_MODE | STATX_NLINK | STATX_SIZE;
 
     /* Not particularly efficient, but works */
-    file = file->child;
-    while (file != NULL)
+    lookup = lookup->child;
+    while (lookup != NULL)
     {
-        if (file->mode & S_IFDIR)
+        if (lookup->inode_ptr->mode & S_IFDIR)
             stx->stx_nlink++; /* Subdirs containing ".." count as hardlinks */
-        file = file->next;
+        lookup = lookup->next;
     }
     return 0;
 }
@@ -492,20 +492,20 @@ static void* ramfs_init(struct fuse_conn_info* conn, struct fuse_config* cfg)
         return NULL;
     }
 
-    if (!file_create("/", &fs->root_file))
+    if (!lookup_create("/", &fs->root_lookup))
     {
         printf("Unable to create root file!\n");
         exit(1);
         return NULL;
     }
 
-    fs->root_file->basename[0] = '/';
-    fs->root_file->mode        = S_IFDIR | 0755;
-    fs->root_file->nlink       = 2;
+    fs->root_lookup->basename[0]      = '/';
+    fs->root_lookup->inode_ptr->mode  = S_IFDIR | 0755;
+    fs->root_lookup->inode_ptr->nlink = 2;
 
-    file_create_blank_nodes_for_stress(fs->root_file, 4, 4);
+    lookup_create_blank_nodes_for_stress(fs->root_lookup, 4, 4);
     for (int i = 0; i < 2; i++)
-        file_create_blank_nodes_for_stress(fs->root_file, 8, 64);
+        lookup_create_blank_nodes_for_stress(fs->root_lookup, 8, 64);
 
     double elapsed = 0.0;
     TIME_BLOCK_END(elapsed);
@@ -518,8 +518,8 @@ static void ramfs_destroy(void* _fs)
     struct filesystem_t* fs = _fs;
     TIME_BLOCK_START();
     printf("\n");
-    file_print_tree(fs->root_file, 0);
-    file_free_files(fs->root_file);
+    lookup_print_tree(fs->root_lookup, 0);
+    lookup_free_lookups(fs->root_lookup);
     FREE(fs);
     double elapsed = 0.0;
     TIME_BLOCK_END(elapsed);

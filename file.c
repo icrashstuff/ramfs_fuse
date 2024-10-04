@@ -28,25 +28,25 @@
 #include <string.h>
 #include <unistd.h>
 
-int file_update_times(struct file_t* file, enum file_time_update_level_t level)
+int inode_update_times(struct inode_t* inode, enum inode_time_update_level_t level)
 {
     struct timespec t;
     if (clock_gettime(CLOCK_REALTIME, &t))
         return 0;
     switch (level)
     {
-    case FILE_TIME_LEVEL_CREATION:
-        file->btime = t;
+    case INODE_TIME_LEVEL_CREATION:
+        inode->btime = t;
         /* FALLTHRU */
-    case FILE_TIME_LEVEL_MODIFY_CONTENTS:
-        file->mtime = t;
-        file->ctime = t; /* Contents being modified counts as a metadata change, I think */
+    case INODE_TIME_LEVEL_MODIFY_CONTENTS:
+        inode->mtime = t;
+        inode->ctime = t; /* Contents being modified counts as a metadata change, I think */
         /* FALLTHRU */
-    case FILE_TIME_LEVEL_ACCESS:
-        file->atime = t;
+    case INODE_TIME_LEVEL_ACCESS:
+        inode->atime = t;
         break;
-    case FILE_TIME_LEVEL_MODIFY_METADATA:
-        file->ctime = t;
+    case INODE_TIME_LEVEL_MODIFY_METADATA:
+        inode->ctime = t;
         break;
     default:
         return 0;
@@ -55,18 +55,18 @@ int file_update_times(struct file_t* file, enum file_time_update_level_t level)
 }
 
 /**
- * Finds a file by recursing through the linked list and examining file_t->basename, sets found_file and returns true if name found
+ * Finds a lookup entry by recursing through the linked list and examining lookup_t->basename, sets found_lookup and returns true if name found
  */
-static int _find_file_path_aware(size_t recur_level, const char* caller, const char* path_min, size_t path_min_len, const char* path, size_t path_len,
-    struct file_t* first_file, struct file_t** found_file)
+static int _find_lookup_path_aware(size_t recur_level, const char* caller, const char* path_min, size_t path_min_len, const char* path, size_t path_len,
+    struct lookup_t* first_lookup, struct lookup_t** found_lookup)
 {
-    if (first_file == NULL || path == NULL || found_file == NULL || path_len == 0)
+    if (first_lookup == NULL || path == NULL || found_lookup == NULL || path_len == 0)
         return 0;
 
 #if 0
     for(size_t i = 0; i < recur_level*2; i++)
         putc(' ', stdout);
-    printf("\"%s\" \t \"%s\"\n", first_file->name, path_min);
+    printf("\"%s\" \t \"%s\"\n", first_lookup->name, path_min);
 #endif
 
     size_t name_len     = 0;
@@ -80,34 +80,34 @@ static int _find_file_path_aware(size_t recur_level, const char* caller, const c
         }
     }
 
-    if (name_len == 0 && first_file->basename != NULL && strncmp(first_file->basename, path_min, path_min_len) == 0
-        && first_file->basename[path_min_len] == '\0')
+    if (name_len == 0 && first_lookup->basename != NULL && strncmp(first_lookup->basename, path_min, path_min_len) == 0
+        && first_lookup->basename[path_min_len] == '\0')
     {
-        printf("[%s][%s]: %zu found file \"%.*s\", level: %zu\n", caller, __func__, name_len, (int)path_len, path, recur_level);
-        *found_file = first_file;
+        printf("[%s][%s]: found lookup \"%.*s\", level: %zu\n", caller, __func__, (int)path_len, path, recur_level);
+        *found_lookup = first_lookup;
         return 1;
     }
 
-    if ((name_len != 0 && strncmp(first_file->basename, &path_min[name_len_off], name_len) == 0))
+    if ((name_len != 0 && strncmp(first_lookup->basename, &path_min[name_len_off], name_len) == 0))
     {
-        if (first_file->child != NULL)
+        if (first_lookup->child != NULL)
         {
-            int ret = _find_file_path_aware(
-                recur_level + 1, caller, &path_min[name_len + 1], path_min_len - (name_len + 1), path, path_len, first_file->child, found_file);
+            int ret = _find_lookup_path_aware(
+                recur_level + 1, caller, &path_min[name_len + 1], path_min_len - (name_len + 1), path, path_len, first_lookup->child, found_lookup);
             if (ret != 0)
                 return ret;
         }
     }
-    else if (first_file->next != NULL)
+    else if (first_lookup->next != NULL)
     {
-        int ret = _find_file_path_aware(recur_level, caller, path_min, path_min_len, path, path_len, first_file->next, found_file);
+        int ret = _find_lookup_path_aware(recur_level, caller, path_min, path_min_len, path, path_len, first_lookup->next, found_lookup);
         if (ret != 0)
             return ret;
     }
     return 0;
 }
 
-int find_filen(const char* caller, const char* path, size_t name_len, struct file_t* first_file, struct file_t** found_file)
+int find_lookupn(const char* caller, const char* path, size_t name_len, struct lookup_t* first_lookup, struct lookup_t** found_lookup)
 {
     TIME_BLOCK_START();
     if (path == NULL)
@@ -116,7 +116,7 @@ int find_filen(const char* caller, const char* path, size_t name_len, struct fil
     {
         if (name_len == 1)
         {
-            *found_file = first_file;
+            *found_lookup = first_lookup;
             return 1;
         }
         else if (name_len > 1)
@@ -127,13 +127,13 @@ int find_filen(const char* caller, const char* path, size_t name_len, struct fil
     }
     if (name_len > 0 && path[name_len - 1] == '/')
         name_len--;
-    if (first_file->child == NULL)
+    if (first_lookup->child == NULL)
         return 0;
-    first_file = first_file->child;
+    first_lookup = first_lookup->child;
 
-    int ret = _find_file_path_aware(0, caller, path, name_len, path, name_len, first_file, found_file);
+    int ret = _find_lookup_path_aware(0, caller, path, name_len, path, name_len, first_lookup, found_lookup);
     if (ret == 0)
-        printf("[%s][%s]: did not find file \"%.*s\"\n", caller, __func__, (int)name_len, path);
+        printf("[%s][%s]: did not find lookup \"%.*s\"\n", caller, __func__, (int)name_len, path);
 
     double elapsed = 0.0;
     TIME_BLOCK_END(elapsed);
@@ -142,187 +142,199 @@ int find_filen(const char* caller, const char* path, size_t name_len, struct fil
     return ret;
 }
 
-int find_file(const char* caller, const char* path, struct file_t* first_file, struct file_t** found_file)
+int find_lookup(const char* caller, const char* path, struct lookup_t* first_lookup, struct lookup_t** found_lookup)
 {
-    return find_filen(caller, path, strlen(path), first_file, found_file);
+    return find_lookupn(caller, path, strlen(path), first_lookup, found_lookup);
 }
 
-int file_append_file(struct file_t* first_file, struct file_t* new_file)
+int lookup_append_lookup_as_next(struct lookup_t* first_lookup, struct lookup_t* new_lookup)
 {
-    if (first_file == NULL || new_file == NULL)
+    if (first_lookup == NULL || new_lookup == NULL)
         return 0;
-    struct file_t* cur_file = first_file;
-    while (cur_file->next != NULL)
-        cur_file = cur_file->next;
-    cur_file->next = new_file;
-    new_file->prev = cur_file;
-    new_file->next = NULL;
+    struct lookup_t* cur_lookup = first_lookup;
+    while (cur_lookup->next != NULL)
+        cur_lookup = cur_lookup->next;
+    cur_lookup->next = new_lookup;
+    new_lookup->prev = cur_lookup;
+    new_lookup->next = NULL;
     return 1;
 }
 
-int file_append_file_as_child(struct file_t* parent_file, struct file_t* new_file)
+int lookup_append_lookup_as_child(struct lookup_t* parent_lookup, struct lookup_t* new_lookup)
 {
-    if (parent_file == NULL || new_file == NULL)
+    if (parent_lookup == NULL || new_lookup == NULL)
         return 0;
-    new_file->parent = parent_file;
-    if (parent_file->child == NULL)
+    new_lookup->parent = parent_lookup;
+    if (parent_lookup->child == NULL)
     {
-        parent_file->child = new_file;
+        parent_lookup->child = new_lookup;
         return 1;
     }
 
-    struct file_t* cur_file = parent_file->child;
-    while (cur_file->next != NULL)
-        cur_file = cur_file->next;
-    cur_file->next = new_file;
-    new_file->prev = cur_file;
-    new_file->next = NULL;
+    struct lookup_t* cur_lookup = parent_lookup->child;
+    while (cur_lookup->next != NULL)
+        cur_lookup = cur_lookup->next;
+    cur_lookup->next = new_lookup;
+    new_lookup->prev = cur_lookup;
+    new_lookup->next = NULL;
     return 1;
 }
 
-int file_remove_file(struct file_t* file)
+int lookup_pluck_lookup(struct lookup_t* lookup)
 {
-    if (file == NULL)
+    if (lookup == NULL)
         return 0;
-    if (file->child != NULL)
+    if (lookup->child != NULL)
         return 0;
 
-    if (file->next != NULL)
-        file->next->prev = file->prev;
-    if (file->prev != NULL)
-        file->prev->next = file->next;
-    if (file->parent != NULL && file->parent->child == file)
-        file->parent->child = file->next;
+    if (lookup->next != NULL)
+        lookup->next->prev = lookup->prev;
+    if (lookup->prev != NULL)
+        lookup->prev->next = lookup->next;
+    if (lookup->parent != NULL && lookup->parent->child == lookup)
+        lookup->parent->child = lookup->next;
 
-    file->parent = NULL;
-    file->next   = NULL;
-    file->prev   = NULL;
+    lookup->parent = NULL;
+    lookup->next   = NULL;
+    lookup->prev   = NULL;
 
     return 1;
 }
 
-int file_free_files(struct file_t* first_file)
+int lookup_free_lookups(struct lookup_t* first_lookup)
 {
-    if (first_file == NULL)
+    if (first_lookup == NULL)
         return 0;
-    struct file_t* next_file  = first_file->next;
-    struct file_t* child_file = first_file->child;
-    FREE(first_file->basename);
-    FREE(first_file->buf);
-    FREE(first_file);
-    if (child_file != NULL)
-        file_free_files(next_file);
-    if (next_file != NULL)
-        file_free_files(next_file);
+    struct lookup_t* next_lookup  = first_lookup->next;
+    struct lookup_t* child_lookup = first_lookup->child;
+    FREE(first_lookup->basename);
+    /* For future hardlinking: Implement nlink support here */
+    FREE(first_lookup->inode_ptr->buf);
+    FREE(first_lookup->inode_ptr);
+    FREE(first_lookup);
+    if (child_lookup != NULL)
+        lookup_free_lookups(next_lookup);
+    if (next_lookup != NULL)
+        lookup_free_lookups(next_lookup);
     return 1;
 }
 
-int file_resize_buf(const char* caller, struct file_t* file, size_t req_size)
+int inode_resize_buf(const char* caller, struct inode_t* inode, size_t req_size)
 {
-    if (file == NULL)
+    if (inode == NULL)
         return 0;
     size_t size = 0;
     if (req_size != 0)
     {
-        if (req_size < FILE_BUF_SIZE_ALIGN_MID)
-            size = ((req_size / FILE_BUF_SIZE_ALIGN_LOW) + 1) * FILE_BUF_SIZE_ALIGN_LOW;
-        else if (req_size < FILE_BUF_SIZE_ALIGN_HIGH)
-            size = ((req_size / FILE_BUF_SIZE_ALIGN_MID) + 1) * FILE_BUF_SIZE_ALIGN_MID;
+        if (req_size < INODE_BUF_SIZE_ALIGN_MID)
+            size = ((req_size / INODE_BUF_SIZE_ALIGN_LOW) + 1) * INODE_BUF_SIZE_ALIGN_LOW;
+        else if (req_size < INODE_BUF_SIZE_ALIGN_HIGH)
+            size = ((req_size / INODE_BUF_SIZE_ALIGN_MID) + 1) * INODE_BUF_SIZE_ALIGN_MID;
         else
-            size = ((req_size / FILE_BUF_SIZE_ALIGN_HIGH) + 1) * FILE_BUF_SIZE_ALIGN_HIGH;
+            size = ((req_size / INODE_BUF_SIZE_ALIGN_HIGH) + 1) * INODE_BUF_SIZE_ALIGN_HIGH;
     }
-    printf("[%s][%s]: Resize \"%s\" size(buf): %zu(%zu)->%zu(%zu)\n", caller, __func__, file->basename, file->file_size, file->buf_size, req_size, size);
+    ANNOYING_PRINTF(
+        "[%s][%s]: Resize %ld size(buf): %zu(%zu)->%zu(%zu)\n", caller, __func__, inode->inode_num, inode->file_size, inode->buf_size, req_size, size);
 
     if (size == 0)
     {
-        FREE(file->buf);
-        file->buf_size  = 0;
-        file->file_size = 0;
+        FREE(inode->buf);
+        inode->buf_size  = 0;
+        inode->file_size = 0;
         return 1;
     }
 
-    if (file->buf_size < size || size < (file->buf_size * FILE_BUF_SIZE_SHRINK_PERCENTAGE / 100))
+    if (inode->buf_size < size || size < (inode->buf_size * INODE_BUF_SIZE_SHRINK_PERCENTAGE / 100))
     {
         char* new_ptr;
-        if (file->buf != NULL)
-            new_ptr = realloc(file->buf, size);
+        if (inode->buf != NULL)
+            new_ptr = realloc(inode->buf, size);
         else
             new_ptr = calloc(size, sizeof(char));
         if (new_ptr == NULL)
             return 0;
-        file->buf_size = size;
-        file->buf      = new_ptr;
-        if (file->file_size < size)
+        inode->buf_size = size;
+        inode->buf      = new_ptr;
+        if (inode->file_size < size)
         {
-            size_t diff = size - file->file_size;
-            memset(&file->buf[file->file_size], 0, diff);
+            size_t diff = size - inode->file_size;
+            memset(&inode->buf[inode->file_size], 0, diff);
         }
     }
 
-    file->file_size = req_size;
+    inode->file_size = req_size;
     return 1;
 }
 
-int file_rename(struct file_t* file, const char* _new_name)
+int lookup_rename(struct lookup_t* lookup, const char* _new_name)
 {
-    if (file == NULL)
+    if (lookup == NULL)
         return 0;
     const char* new_basename = util_basename(_new_name);
     size_t      old_name_len = 0;
     size_t      new_name_len = strlen(new_basename) + 1;
 
-    if (file->basename != NULL)
-        old_name_len = file->name_buf_size;
+    if (lookup->basename != NULL)
+        old_name_len = lookup->name_buf_size;
 
     if (new_name_len == 0)
     {
-        FREE(file->basename);
-        file->name_buf_size = 0;
+        FREE(lookup->basename);
+        lookup->name_buf_size = 0;
         return 1;
     }
     else if (old_name_len < new_name_len)
     {
         char* new_name_buf = calloc(new_name_len, sizeof(char));
-        char* old_name_buf = file->basename;
+        char* old_name_buf = lookup->basename;
         if (new_name_buf == NULL)
             return 0;
         memcpy(new_name_buf, new_basename, new_name_len);
-        file->basename = new_name_buf;
+        lookup->basename = new_name_buf;
         FREE(old_name_buf);
         return 1;
     }
     else if (new_name_len < old_name_len)
     {
-        memcpy(file->basename, new_basename, new_name_len);
+        memcpy(lookup->basename, new_basename, new_name_len);
         return 1;
     }
 
     return 0;
 }
 
-int file_create(const char* name, struct file_t** file_ptr)
+int lookup_create(const char* name, struct lookup_t** lookup_ptr)
 {
-    if (file_ptr == NULL)
+    static size_t next_inode_num = 0;
+    if (lookup_ptr == NULL)
         return 0;
-    struct file_t* file = calloc(1, sizeof(struct file_t));
-    if (file == NULL)
+    struct lookup_t* lookup = calloc(1, sizeof(struct lookup_t));
+    struct inode_t*  inode  = calloc(1, sizeof(struct inode_t));
+    if (inode == NULL || lookup == NULL)
+    {
+        FREE(lookup);
+        FREE(inode);
         return 0;
-    if (!file_rename(file, name))
+    }
+    if (!lookup_rename(lookup, name))
         return 0;
-    file_resize_buf(__func__, file, 0);
-    file_update_times(file, FILE_TIME_LEVEL_CREATION);
-    file->uid   = getuid();
-    file->gid   = getuid();
-    file->mode  = S_IFREG | 0644;
-    file->nlink = 1;
+    inode_resize_buf(__func__, inode, 0);
+    inode_update_times(inode, INODE_TIME_LEVEL_CREATION);
+    inode->uid       = getuid();
+    inode->gid       = getuid();
+    inode->mode      = S_IFREG | 0644;
+    inode->nlink     = 1;
+    inode->inode_num = next_inode_num++;
 
-    *file_ptr = file;
+    lookup->inode_ptr = inode;
+    *lookup_ptr       = lookup;
+
     return 1;
 }
 
-void file_print_tree(struct file_t* file, long int level)
+void lookup_print_tree(struct lookup_t* lookup, long int level)
 {
-    if (file == NULL)
+    if (lookup == NULL)
         return;
     for (int i = 0; i < level; i++)
     {
@@ -331,18 +343,19 @@ void file_print_tree(struct file_t* file, long int level)
         else
             putc(' ', stdout);
     }
-    printf("+ \"%s\"\n", file->basename);
+    printf("+ \"%s\"\n", lookup->basename);
 
-    file_print_tree(file->child, level + 4);
-    file_print_tree(file->next, level);
+    lookup_print_tree(lookup->child, level + 4);
+    lookup_print_tree(lookup->next, level);
 }
 
-void file_create_blank_nodes_for_stress(struct file_t* _root_file, uint num_dirs, uint num_files)
+void lookup_create_blank_nodes_for_stress(struct lookup_t* _root_lookup, uint num_dirs, uint num_files)
 {
-    struct file_t* f1            = NULL;
-    struct file_t* dir           = _root_file;
-    int            name_buf_size = 128;
-    char*          fname_buf     = calloc(name_buf_size, sizeof(char));
+    struct inode_t*  f1            = NULL;
+    struct lookup_t* l1            = NULL;
+    struct lookup_t* dir           = _root_lookup;
+    int              name_buf_size = 128;
+    char*            fname_buf     = calloc(name_buf_size, sizeof(char));
 
     if (fname_buf == NULL)
     {
@@ -361,13 +374,13 @@ void file_create_blank_nodes_for_stress(struct file_t* _root_file, uint num_dirs
             sn_ret = snprintf(fname_buf, name_buf_size, "file_0x%04X.txt", counter_file++);
             if (sn_ret > name_buf_size)
                 continue;
-            if (file_create(fname_buf, &f1))
+            if (lookup_create(fname_buf, &l1))
             {
                 ANNOYING_PRINTF("[%s]: file created, appending...\n", __func__);
-                if (!file_append_file_as_child(dir, f1))
+                if (!lookup_append_lookup_as_child(dir, l1))
                 {
                     ANNOYING_PRINTF("[%s]: appending failed, freeing file...\n", __func__);
-                    file_free_files(f1);
+                    lookup_free_lookups(l1);
                 }
             }
         }
@@ -375,19 +388,20 @@ void file_create_blank_nodes_for_stress(struct file_t* _root_file, uint num_dirs
         sn_ret = snprintf(fname_buf, name_buf_size, "dir_0x%04X", counter_dir++);
         if (sn_ret > name_buf_size)
             continue;
-        if (file_create(fname_buf, &f1))
+        if (lookup_create(fname_buf, &l1))
         {
+            f1 = l1->inode_ptr;
             ANNOYING_PRINTF("[%s]: directory created, appending...\n", __func__);
             f1->mode &= ~S_IFMT;
             f1->mode |= S_IFDIR;
             f1->nlink = 2;
-            if (!file_append_file_as_child(dir, f1))
+            if (!lookup_append_lookup_as_child(dir, l1))
             {
                 ANNOYING_PRINTF("[%s]: appending failed, freeing directory...\n", __func__);
-                file_free_files(f1);
+                lookup_free_lookups(l1);
             }
             else
-                dir = f1;
+                dir = l1;
         }
     }
     FREE(fname_buf);
