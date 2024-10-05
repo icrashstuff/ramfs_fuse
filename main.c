@@ -308,6 +308,40 @@ static int ramfs_rename(const char* oldpath, const char* newpath, unsigned int f
     return 0;
 }
 
+int ramfs_chmod(const char* path, mode_t mode, struct fuse_file_info* fi)
+{
+    printf("[%s]: Path: \"%s\", %o\n", __func__, path, mode);
+    struct inode_t*  inode        = fi == NULL ? NULL : ((struct inode_t*)fi->fh);
+    struct lookup_t* _root_lookup = get_filesytem_from_fuse_context()->root_lookup;
+
+    if (inode != NULL || find_inode(__func__, path, _root_lookup, &inode))
+    {
+        inode->mode = (inode->mode & ~ALLPERMS) | mode;
+        return 0;
+    }
+    else
+        return -ENOENT;
+}
+
+int ramfs_chown(const char* path, uid_t uid, gid_t gid, struct fuse_file_info* fi)
+{
+    printf("[%s]: Path: \"%s\", uid: %d, gid: %d\n", __func__, path, uid, gid);
+    struct inode_t*  inode        = fi == NULL ? NULL : ((struct inode_t*)fi->fh);
+    struct lookup_t* _root_lookup = get_filesytem_from_fuse_context()->root_lookup;
+
+    if (inode != NULL || find_inode(__func__, path, _root_lookup, &inode))
+    {
+        if (uid != (unsigned int)-1)
+            inode->uid = uid;
+        if (gid != (unsigned int)-1)
+            inode->gid = gid;
+        inode->mode &= (~S_ISUID | ~S_ISGID);
+        return 0;
+    }
+    else
+        return -ENOENT;
+}
+
 static int ramfs_truncate(const char* path, off_t size, struct fuse_file_info* fi)
 {
     struct inode_t*  inode        = fi == NULL ? NULL : ((struct inode_t*)fi->fh);
@@ -585,6 +619,8 @@ static const struct fuse_operations ramfs_operations = {
     .release  = ramfs_release,
     .rename   = ramfs_rename,
     .write    = ramfs_write,
+    .chmod    = ramfs_chmod,
+    .chown    = ramfs_chown,
     .truncate = ramfs_truncate,
     .symlink  = ramfs_symlink,
     .readlink = ramfs_readlink,
