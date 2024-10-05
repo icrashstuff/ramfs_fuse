@@ -83,7 +83,7 @@ static int _find_lookup_path_aware(size_t recur_level, const char* caller, const
     if (name_len == 0 && first_lookup->basename != NULL && strncmp(first_lookup->basename, path_min, path_min_len) == 0
         && first_lookup->basename[path_min_len] == '\0')
     {
-        printf("[%s][%s]: found lookup \"%.*s\", level: %zu\n", caller, __func__, (int)path_len, path, recur_level);
+        ANNOYING_PRINTF("[%s][%s]: found lookup \"%.*s\", level: %zu\n", caller, __func__, (int)path_len, path, recur_level);
         *found_lookup = first_lookup;
         return 1;
     }
@@ -133,12 +133,12 @@ int find_lookupn(const char* caller, const char* path, size_t name_len, struct l
 
     int ret = _find_lookup_path_aware(0, caller, path, name_len, path, name_len, first_lookup, found_lookup);
     if (ret == 0)
-        printf("[%s][%s]: did not find lookup \"%.*s\"\n", caller, __func__, (int)name_len, path);
+        ANNOYING_PRINTF("[%s][%s]: did not find lookup \"%.*s\"\n", caller, __func__, (int)name_len, path);
 
     double elapsed = 0.0;
     TIME_BLOCK_END(elapsed);
 
-    printf("[%s][%s]: Path: \"%.*s\", time: %fms\n", caller, __func__, (int)name_len, path, elapsed / 1000.0);
+    ANNOYING_PRINTF("[%s][%s]: Path: \"%.*s\", time: %fms\n", caller, __func__, (int)name_len, path, elapsed / 1000.0);
     return ret;
 }
 

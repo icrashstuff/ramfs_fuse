@@ -612,6 +612,8 @@ static int ramfs_statx(const char* path, int flags, int mask, struct statx* stx,
 }
 #endif
 
+static size_t nodes_for_stress = 0;
+
 static void* ramfs_init(struct fuse_conn_info* conn, struct fuse_config* cfg)
 {
     TIME_BLOCK_START();
@@ -643,9 +645,17 @@ static void* ramfs_init(struct fuse_conn_info* conn, struct fuse_config* cfg)
     fs->root_lookup->inode_ptr->mode  = S_IFDIR | 0755;
     fs->root_lookup->inode_ptr->nlink = 1;
 
-    lookup_create_blank_nodes_for_stress(fs->root_lookup, 4, 4);
-    for (int i = 0; i < 2; i++)
-        lookup_create_blank_nodes_for_stress(fs->root_lookup, 8, 2);
+    if (nodes_for_stress > 0)
+    {
+        lookup_create_blank_nodes_for_stress(fs->root_lookup, 4, 4);
+
+        if (nodes_for_stress > 1)
+            for (int i = 0; i < 64; i++)
+                lookup_create_blank_nodes_for_stress(fs->root_lookup, 8, 64);
+        else
+            for (int i = 0; i < 2; i++)
+                lookup_create_blank_nodes_for_stress(fs->root_lookup, 8, 2);
+    }
 
     double elapsed = 0.0;
     TIME_BLOCK_END(elapsed);
@@ -727,6 +737,10 @@ int main(int argc, char* argv[])
             show_debug = 1;
         else if (strcmp("--ramfs-nofuse", arg) == 0)
             nofuse = 1;
+        else if (strcmp("--ramfs-stress3", arg) == 0)
+            nodes_for_stress += 1;
+        else if (strcmp("--ramfs-stress65", arg) == 0)
+            nodes_for_stress += 2;
         else
             argv_fuse[argc_fuse++] = arg;
 
@@ -745,7 +759,9 @@ int main(int argc, char* argv[])
         printf("\nUsage: %s [options] mountpoint\n", argv[0]);
         printf("Filesystem options:\n");
         printf("    --ramfs-debug       Enables all ramfs debug messages (ANNOYING_PRINTF)\n");
-        printf("    --ramfs-nofuse      Initialize then immediately destroy filesystem\n\n");
+        printf("    --ramfs-nofuse      Initialize then immediately destroy filesystem\n");
+        printf("    --ramfs-stress3     Run lookup_create_blank_nodes_for_stress 3 times\n");
+        printf("    --ramfs-stress65    Run lookup_create_blank_nodes_for_stress 65 times\n\n");
         /* Setting argv[0] to a zero length string disables libfuse from printing another Usage string */
         argv_fuse[0][0] = 0;
     }
