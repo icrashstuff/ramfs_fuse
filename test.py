@@ -30,6 +30,7 @@ import random
 import logging
 
 logger = logging.getLogger(__name__)
+fname_charset = string.ascii_letters + string.digits + string.punctuation.replace("/", "")
 
 
 def write_test_buf(fname: str, test_buf: bytes = random.randbytes(random.randrange(0, 64))):
@@ -278,6 +279,10 @@ def do_test_list(test_list) -> [int, int]:
     return results
 
 
+def gen_basename(seeded_random: random) -> str:
+    return "".join(seeded_random.choices(fname_charset, k=seeded_random.randrange(3, 64)))
+
+
 if __name__ == "__main__":
     if (len(sys.argv) < 2 or len(sys.argv) > 3):
         print("Usage: %s mountpoint [random_seed]" % sys.argv[0])
@@ -291,21 +296,22 @@ if __name__ == "__main__":
     logger.info("Random seed %d" % random_seed)
     seeded_random = random.Random(random_seed)
 
-    fname_charset = string.ascii_letters + \
-        string.digits + string.punctuation.replace("/", "")
-
     fnames1 = [os.path.join(sys.argv[1], "hello")]
     fnames1.append(os.path.join(sys.argv[1], "dir_0x0000/hello2"))
-    fnames1.append(os.path.join(
-        sys.argv[1], "dir_0x0000/dir_0x0001/dir_0x0002/hello3"))
+    fnames1.append(os.path.join(sys.argv[1], "dir_0x0000/dir_0x0001/dir_0x0002/hello3"))
     fnames2 = []
 
     for i in range(4):
-        fname1 = os.path.join(sys.argv[1], "".join(seeded_random.choices(
-            fname_charset, k=seeded_random.randrange(3, 16))))
+        fname1 = os.path.join(sys.argv[1], gen_basename(seeded_random))
         fnames1.append(fname1)
     for i in fnames1:
         fnames2.append(i + "_2")
+
+    fnames1.append(os.path.join(sys.argv[1], gen_basename(seeded_random)))
+    fnames2.append(os.path.join(sys.argv[1], "dir_0x0000", gen_basename(seeded_random)))
+    fnames1.append(os.path.join(sys.argv[1], "dir_0x0000/dir_0x0001", gen_basename(seeded_random)))
+    fnames2.append(os.path.join(sys.argv[1], gen_basename(seeded_random)))
+
     for i in [*fnames1, *fnames2]:
         if (os.path.exists(i)):
             logger.critical("File \"%s\" already exists" % i)

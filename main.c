@@ -244,19 +244,16 @@ static int ramfs_release(const char* path, struct fuse_file_info* fi)
 
 static int ramfs_rename(const char* oldpath, const char* newpath, unsigned int flags)
 {
-    printf("[%s]: \"%s\"->\"%s\"\n", __func__, oldpath, newpath);
+    if (flags & RENAME_EXCHANGE)
+        printf("[%s]: \"%s\"<->\"%s\"\n", __func__, oldpath, newpath);
+    else
+        printf("[%s]: \"%s\"->\"%s\"\n", __func__, oldpath, newpath);
 
     if ((oldpath != NULL && strcmp(oldpath, "/") == 0) || (newpath != NULL && strcmp(oldpath, "/") == 0))
-        return -EPERM;
+        return -EACCES;
 
-    size_t oldpath_len     = strlen(oldpath);
-    size_t newpath_len     = strlen(newpath);
-    size_t oldpath_dir_len = util_dirname_len(oldpath, oldpath_len);
-    size_t newpath_dir_len = util_dirname_len(newpath, newpath_len);
-
-    /* Temporary check to disable cross directory renaming */
-    if (oldpath_dir_len != newpath_dir_len && strncmp(oldpath, newpath, oldpath_len))
-        return -EINVAL;
+    size_t oldpath_len = strlen(oldpath);
+    size_t newpath_len = strlen(newpath);
 
     struct lookup_t* old_lookup   = NULL;
     struct lookup_t* new_lookup   = NULL;
@@ -271,21 +268,15 @@ static int ramfs_rename(const char* oldpath, const char* newpath, unsigned int f
         return -ENOENT;
     find_lookupn(__func__, newpath, newpath_len, _root_lookup, &new_lookup);
 
-    /* Temporary check to disable directory renaming */
-    if (old_lookup->inode_ptr->mode & S_IFDIR)
-        return -EINVAL;
-    if (new_lookup != NULL && new_lookup->inode_ptr->mode & S_IFDIR)
-        return -EINVAL;
-
-    if (flags & RENAME_NOREPLACE && new_lookup != NULL)
+    if (new_lookup != NULL)
     {
-        if (new_lookup != NULL)
-            return -EEXIST;
-
-        if (!lookup_rename(old_lookup, newpath))
-            return -ENOMEM;
+        if (!(old_lookup->inode_ptr->mode & S_IFDIR) && new_lookup->inode_ptr->mode & S_IFDIR)
+            return -EISDIR;
+        else if (!(new_lookup->inode_ptr->mode & S_IFDIR) && old_lookup->inode_ptr->mode & S_IFDIR)
+            return -ENOTDIR;
     }
-    else if (flags & RENAME_EXCHANGE)
+
+    if (flags & RENAME_EXCHANGE)
     {
         if (new_lookup == NULL)
             return -ENOENT;
@@ -296,9 +287,22 @@ static int ramfs_rename(const char* oldpath, const char* newpath, unsigned int f
     }
     else
     {
-        if (!lookup_rename(old_lookup, newpath))
-            return -ENOMEM;
-        lookup_pluck_and_free_lookup(new_lookup);
+        struct lookup_t* new_dir_lookup  = NULL;
+        size_t           newpath_dir_len = util_dirname_len(newpath, newpath_len);
+        find_lookupn(__func__, newpath, newpath_dir_len, _root_lookup, &new_dir_lookup);
+        if (new_lookup != NULL)
+        {
+            if (flags & RENAME_NOREPLACE)
+                return -EEXIST;
+            if (new_lookup->child != NULL)
+                return -ENOTEMPTY;
+            if (new_dir_lookup == NULL)
+                return -EIO;
+            lookup_pluck_and_free_lookup(new_lookup);
+        }
+        lookup_rename(old_lookup, newpath);
+        if (lookup_pluck_lookup(old_lookup))
+            lookup_append_lookup_as_child(new_dir_lookup, old_lookup);
     }
     inode_update_times(old_lookup->inode_ptr, INODE_TIME_LEVEL_MODIFY_METADATA);
     return 0;

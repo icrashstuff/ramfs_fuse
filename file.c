@@ -207,8 +207,6 @@ int lookup_pluck_lookup(struct lookup_t* lookup)
 {
     if (lookup == NULL)
         return 0;
-    if (lookup->child != NULL)
-        return 0;
 
     if (lookup->next != NULL)
         lookup->next->prev = lookup->prev;
