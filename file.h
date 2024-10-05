@@ -145,6 +145,20 @@ int find_lookupn(const char* caller, const char* path, size_t name_len, struct l
 int find_lookup(const char* caller, const char* path, struct lookup_t* first_lookup, struct lookup_t** found_lookup);
 
 /**
+ * Convenience function that calls find_lookupn and sets *found_inode to inode_ptr
+ *
+ * Returns 1 on success and 0 on failure
+ */
+int find_inoden(const char* caller, const char* path, size_t name_len, struct lookup_t* first_lookup, struct inode_t** found_inode);
+
+/**
+ * Convenience function that calls find_lookup and sets *found_inode to inode_ptr
+ *
+ * Returns 1 on success and 0 on failure
+ */
+int find_inode(const char* caller, const char* path, struct lookup_t* first_lookup, struct inode_t** found_inode);
+
+/**
  * Appends new_lookup to the end of the current level list of first_lookup
  *
  * Returns 1 on success and 0 on failure
@@ -166,13 +180,36 @@ int lookup_append_lookup_as_child(struct lookup_t* parent_lookup, struct lookup_
 int lookup_pluck_lookup(struct lookup_t* lookup);
 
 /**
- * Frees a lookup, its children, and all following lookup_t->next entries
+ * Frees a lookup, its children, and all following lookup_t->next and lookup_t->child entries
  *
- * Also frees the underlying inode
+ * Also calls inode_free_inode() on the underlying inode
  *
  * Returns 1 on success and 0 on failure
  */
 int lookup_free_lookups(struct lookup_t* first_lookup);
+
+/**
+ * Convenience function that plucks and then frees lookup in a way that is least likely to cause problems
+ *
+ * Returns 1 on success and 0 on failure
+ */
+int lookup_pluck_and_free_lookup(struct lookup_t* lookup);
+
+/**
+ * Frees a lookup, its children, and all following lookup_t->next and lookup_t->child entries
+ *
+ * Also calls inode_free_inode_no_refs() on the underlying inode after zeroing nrefs and decrementing nlink
+ *
+ * Returns 1 on success and 0 on failure
+ */
+int lookup_free_lookups_no_refs(struct lookup_t* first_lookup);
+
+/**
+ * Frees an inode if nlink and nrefs are 0
+ *
+ * Returns 1 on success and 0 if inode is null
+ */
+int inode_free_inode(struct inode_t* inode);
 
 /**
  * Resizes the buffer to at least req_size and changes the file_size to req_size
@@ -194,6 +231,15 @@ int lookup_rename(struct lookup_t* lookup, const char* new_name);
  * Returns 1 on success and 0 on failure
  */
 int lookup_create(const char* name, struct lookup_t** lookup_ptr);
+
+/**
+ * Creates a lookup_t object with inode_ptr from src_lookup at *lookup_ptr
+ *
+ * Increments inode_ptr->nlink
+ *
+ * Returns 1 on success and 0 on failure
+ */
+int lookup_clone_lookup(const char* name, struct lookup_t* src_lookup, struct lookup_t** lookup_ptr);
 
 /**
  * Prints a tree(1)-like view of a lookup_t structure

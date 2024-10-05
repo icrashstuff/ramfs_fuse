@@ -21,7 +21,7 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 #
-# Formatted with `autopep8`
+# Formatted with `autopep8 --max-line-length  99`
 import os
 import sys
 import time
@@ -171,9 +171,86 @@ def test_unlink_simple(fname1: str, num_bytes: int = 64):
         return True
 
 
+def test_hardlink_create(fname: str, target: str, num_bytes: int = 64) -> bool:
+    remove_test_file(target)
+    buf1 = random.randbytes(num_bytes)
+    write_test_buf(fname, buf1)
+    try:
+        os.link(fname, target)
+        ret = check_test_buf(fname, buf1)
+        if (ret == 1):
+            ret = check_test_buf(target, buf1)
+        if (ret == 1):
+            buf1 = random.randbytes(num_bytes)
+            write_test_buf(fname, buf1)
+            ret = check_test_buf(fname, buf1)
+            if (ret == 1):
+                ret = check_test_buf(target, buf1)
+        remove_test_file(fname)
+        remove_test_file(target)
+        return ret
+    except Exception as e:
+        remove_test_file(fname)
+        remove_test_file(target)
+        raise e
+
+
+def test_hardlink_create_invalid_exist(fname: str, target: str, num_bytes: int = 64) -> bool:
+    write_test_buf(fname)
+    write_test_buf(target)
+    try:
+        os.link(fname, target)
+    except OSError as e:
+        if (e.errno == 17):
+            remove_test_file(fname)
+            remove_test_file(target)
+            return True
+    remove_test_file(fname)
+    remove_test_file(target)
+    return False
+
+
+def test_hardlink_create_invalid_nsrc(fname: str, target: str, num_bytes: int = 64) -> bool:
+    remove_test_file(fname)
+    remove_test_file(target)
+    try:
+        os.link(fname, target)
+    except OSError as e:
+        if (e.errno == 2):
+            return True
+    return False
+
+
+def test_hardlink_delete(fname: str, target: str, del_sel: int, num_bytes: int = 64) -> bool:
+    remove_test_file(target)
+    buf1 = random.randbytes(num_bytes)
+    write_test_buf(fname, buf1)
+    try:
+        os.link(fname, target)
+        name_to_check = ""
+        if (del_sel == 0):
+            remove_test_file(fname)
+            name_to_check = target
+        else:
+            remove_test_file(target)
+            name_to_check = fname
+        ret = check_test_buf(name_to_check, buf1)
+        if (ret == 1):
+            buf1 = random.randbytes(num_bytes)
+            write_test_buf(name_to_check, buf1)
+            ret = check_test_buf(name_to_check, buf1)
+        remove_test_file(fname)
+        remove_test_file(target)
+        return ret
+    except Exception as e:
+        remove_test_file(fname)
+        remove_test_file(target)
+        raise e
+
+
 def do_test(function, function_suffix, *args) -> bool:
     name = function.__name__
-    if (type(function_suffix) == str):
+    if (function_suffix is str):
         name = "%s%s" % (name, function_suffix)
     try:
         ret = function(*args)
@@ -253,6 +330,12 @@ if __name__ == "__main__":
 
         test_list.append([test_symlink_read_non_link, None, fname1])
         test_list.append([test_symlink_create_invalid, None, fname1])
+
+        test_list.append([test_hardlink_create, None, fname1, fname2])
+        test_list.append([test_hardlink_create_invalid_exist, None, fname1, fname2])
+        test_list.append([test_hardlink_create_invalid_nsrc, None, fname1, fname2])
+        test_list.append([test_hardlink_delete, "_fname", fname1, fname2, 0])
+        test_list.append([test_hardlink_delete, "_target", fname1, fname2, 1])
 
         test_list.append([test_rename, None, fname1, fname2])
         test_list.append([test_rename_overwrite, None, fname1, fname2])

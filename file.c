@@ -66,7 +66,7 @@ static int _find_lookup_path_aware(size_t recur_level, const char* caller, const
 #if 0
     for(size_t i = 0; i < recur_level*2; i++)
         putc(' ', stdout);
-    printf("\"%s\" \t \"%s\"\n", first_lookup->name, path_min);
+    printf("\"%s\" \t \"%s\"\n", first_lookup->basename, path_min);
 #endif
 
     size_t name_len     = 0;
@@ -147,6 +147,29 @@ int find_lookup(const char* caller, const char* path, struct lookup_t* first_loo
     return find_lookupn(caller, path, strlen(path), first_lookup, found_lookup);
 }
 
+int find_inoden(const char* caller, const char* path, size_t name_len, struct lookup_t* first_lookup, struct inode_t** found_inode)
+{
+    struct lookup_t* l = NULL;
+
+    int r = find_lookupn(caller, path, name_len, first_lookup, &l);
+
+    if (l != NULL)
+        *found_inode = l->inode_ptr;
+
+    return r;
+}
+int find_inode(const char* caller, const char* path, struct lookup_t* first_lookup, struct inode_t** found_inode)
+{
+    struct lookup_t* l = NULL;
+
+    int r = find_lookupn(caller, path, strlen(path), first_lookup, &l);
+
+    if (l != NULL)
+        *found_inode = l->inode_ptr;
+
+    return r;
+}
+
 int lookup_append_lookup_as_next(struct lookup_t* first_lookup, struct lookup_t* new_lookup)
 {
     if (first_lookup == NULL || new_lookup == NULL)
@@ -201,21 +224,58 @@ int lookup_pluck_lookup(struct lookup_t* lookup)
     return 1;
 }
 
-int lookup_free_lookups(struct lookup_t* first_lookup)
+static int _lookup_free_lookups(struct lookup_t* first_lookup, int zero_nrefs)
 {
     if (first_lookup == NULL)
         return 0;
     struct lookup_t* next_lookup  = first_lookup->next;
     struct lookup_t* child_lookup = first_lookup->child;
     FREE(first_lookup->basename);
-    /* For future hardlinking: Implement nlink support here */
-    FREE(first_lookup->inode_ptr->buf);
-    FREE(first_lookup->inode_ptr);
+    if (zero_nrefs)
+    {
+        first_lookup->inode_ptr->nlink--;
+        first_lookup->inode_ptr->nrefs = 0;
+    }
+    inode_free_inode(first_lookup->inode_ptr);
     FREE(first_lookup);
     if (child_lookup != NULL)
-        lookup_free_lookups(next_lookup);
+        _lookup_free_lookups(child_lookup, zero_nrefs);
     if (next_lookup != NULL)
-        lookup_free_lookups(next_lookup);
+        _lookup_free_lookups(next_lookup, zero_nrefs);
+    return 1;
+}
+
+int lookup_free_lookups(struct lookup_t* first_lookup) { return _lookup_free_lookups(first_lookup, 0); }
+
+int lookup_free_lookups_no_refs(struct lookup_t* first_lookup) { return _lookup_free_lookups(first_lookup, 1); }
+
+int lookup_pluck_and_free_lookup(struct lookup_t* lookup)
+{
+    if (lookup == NULL)
+        return 0;
+    if (!lookup_pluck_lookup(lookup))
+        return 0;
+    lookup->inode_ptr->nlink--;
+    if (!lookup_free_lookups(lookup))
+        return 0;
+    return 1;
+}
+
+static size_t next_inode_num = 0;
+
+int inode_free_inode(struct inode_t* inode)
+{
+    if (inode == NULL)
+        return 0;
+    if (inode->nrefs > 0)
+        return 1;
+    if (inode->nlink > 1)
+        return 1;
+    if (inode->nlink > 0 && !(inode->mode & S_IFDIR))
+        return 1;
+    ANNOYING_PRINTF("[%s]: Freeing inode %09zu/%zu\n", __func__, inode->inode_num, next_inode_num - 1);
+    FREE(inode->buf);
+    FREE(inode);
     return 1;
 }
 
@@ -305,7 +365,6 @@ int lookup_rename(struct lookup_t* lookup, const char* _new_name)
 
 int lookup_create(const char* name, struct lookup_t** lookup_ptr)
 {
-    static size_t next_inode_num = 0;
     if (lookup_ptr == NULL)
         return 0;
     struct lookup_t* lookup = calloc(1, sizeof(struct lookup_t));
@@ -327,6 +386,29 @@ int lookup_create(const char* name, struct lookup_t** lookup_ptr)
     inode->inode_num = next_inode_num++;
 
     lookup->inode_ptr = inode;
+    *lookup_ptr       = lookup;
+
+    return 1;
+}
+
+int lookup_clone_lookup(const char* name, struct lookup_t* src_lookup, struct lookup_t** lookup_ptr)
+{
+    if (lookup_ptr == NULL || src_lookup == NULL || src_lookup->inode_ptr == NULL)
+        return 0;
+    struct lookup_t* lookup = calloc(1, sizeof(struct lookup_t));
+    if (lookup == NULL)
+    {
+        FREE(lookup);
+        return 0;
+    }
+    if (!lookup_rename(lookup, name))
+        return 0;
+
+    /* Incrementing nlink counts as modifying metadata */
+    inode_update_times(src_lookup->inode_ptr, INODE_TIME_LEVEL_MODIFY_METADATA);
+    src_lookup->inode_ptr->nlink++;
+
+    lookup->inode_ptr = src_lookup->inode_ptr;
     *lookup_ptr       = lookup;
 
     return 1;
