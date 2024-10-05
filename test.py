@@ -249,6 +249,59 @@ def test_hardlink_delete(fname: str, target: str, del_sel: int, num_bytes: int =
         raise e
 
 
+def test_directory_create_delete(dname1: str, num_bytes: int = 64) -> bool:
+    buf1 = random.randbytes(num_bytes)
+    try:
+        os.mkdir(dname1)
+    except FileExistsError:
+        pass
+    ret = False
+    if (os.path.isdir(dname1)):
+        ret = True
+    try:
+        os.rmdir(dname1)
+    except FileNotFoundError:
+        pass
+    return ret
+
+
+def test_directory_delete_non_empty(dname1: str, basename: str, num_bytes: int = 64) -> bool:
+    buf1 = random.randbytes(num_bytes)
+    try:
+        os.mkdir(dname1)
+    except FileExistsError:
+        pass
+    write_test_buf(os.path.join(dname1, basename), buf1)
+    ret = False
+    try:
+        os.rmdir(dname1)
+    except OSError as e:
+        if (e.errno == 39 and check_test_buf(os.path.join(dname1, basename), buf1)):
+            ret = True
+    remove_test_file(os.path.join(dname1, basename))
+    os.rmdir(dname1)
+    return ret
+
+
+def test_directory_move(dname1: str, dname2: str, basename: str, num_bytes: int = 64) -> bool:
+    try:
+        os.rmdir(dname2)
+    except FileNotFoundError:
+        pass
+    buf1 = random.randbytes(num_bytes)
+    try:
+        os.mkdir(dname1)
+    except FileExistsError:
+        pass
+    write_test_buf(os.path.join(dname1, basename), buf1)
+    ret = False
+    os.rename(dname1, dname2)
+    ret = check_test_buf(os.path.join(dname2, basename), buf1)
+    remove_test_file(os.path.join(dname2, basename))
+    os.rmdir(dname2)
+    return ret
+
+
 def do_test(function, function_suffix, *args) -> bool:
     name = function.__name__
     if (function_suffix is str):
@@ -300,6 +353,9 @@ if __name__ == "__main__":
     fnames1.append(os.path.join(sys.argv[1], "dir_0x0000/hello2"))
     fnames1.append(os.path.join(sys.argv[1], "dir_0x0000/dir_0x0001/dir_0x0002/hello3"))
     fnames2 = []
+    dnames1 = []
+    dnames2 = []
+    basenames = []
 
     for i in range(4):
         fname1 = os.path.join(sys.argv[1], gen_basename(seeded_random))
@@ -312,7 +368,13 @@ if __name__ == "__main__":
     fnames1.append(os.path.join(sys.argv[1], "dir_0x0000/dir_0x0001", gen_basename(seeded_random)))
     fnames2.append(os.path.join(sys.argv[1], gen_basename(seeded_random)))
 
-    for i in [*fnames1, *fnames2]:
+    for i in fnames1:
+        d = os.path.join(sys.argv[1], gen_basename(seeded_random))
+        dnames1.append(d)
+        dnames2.append(d + "_2")
+        basenames.append(gen_basename(seeded_random))
+
+    for i in [*fnames1, *fnames2, *dnames1, *dnames2]:
         if (os.path.exists(i)):
             logger.critical("File \"%s\" already exists" % i)
             sys.exit(1)
@@ -321,6 +383,9 @@ if __name__ == "__main__":
     for _i in range(len(fnames1)):
         fname1 = fnames1[_i]
         fname2 = fnames2[_i]
+        dname1 = dnames1[_i]
+        dname2 = dnames2[_i]
+        basename = basenames[_i]
         logger.info("fnames[%d]: (\"%s\", \"%s\")" % (_i, fname1, fname2))
         test_list.append([test_unlink_simple, None, fname1])
         test_list.append([test_unlinking_while_open, None,
@@ -346,6 +411,10 @@ if __name__ == "__main__":
         test_list.append([test_rename, None, fname1, fname2])
         test_list.append([test_rename_overwrite, None, fname1, fname2])
         test_list.append([test_rename_self, None, fname1])
+
+        test_list.append([test_directory_create_delete, None, dname1])
+        test_list.append([test_directory_delete_non_empty, None, dname1, basename])
+        test_list.append([test_directory_move, None, dname1, dname2, basename])
 
         for j in (test_writing_file_no_remove, test_writing_file):
             for k in range(24):

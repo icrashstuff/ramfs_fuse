@@ -153,6 +153,8 @@ static int ramfs_mknod(const char* path, mode_t mode, dev_t rdev)
     if (!lookup_create(path, &l1))
         return -ENOSPC;
 
+    l1->inode_ptr->mode = (l1->inode_ptr->mode & ~ALLPERMS) | mode;
+
     printf("[%s]: file created, appending...\n", __func__);
     if (!lookup_append_lookup_as_child(dir_lookup, l1))
     {
@@ -161,6 +163,61 @@ static int ramfs_mknod(const char* path, mode_t mode, dev_t rdev)
         return -EIO;
     }
     return 0;
+}
+
+int ramfs_mkdir(const char* path, mode_t mode)
+{
+    printf("[%s]: Path: \"%s\"\n", __func__, path);
+    if (path == NULL)
+        return -EIO;
+
+    struct lookup_t* lookup;
+    struct lookup_t* dir_lookup;
+    struct lookup_t* _root_lookup = get_filesytem_from_fuse_context()->root_lookup;
+
+    size_t path_len = strlen(path);
+    size_t dir_len  = util_dirname_len(path, path_len);
+
+    printf("[%s]: Dir: \"%.*s\"\n", __func__, (int)dir_len, path);
+
+    if (!find_lookupn(__func__, path, dir_len, _root_lookup, &dir_lookup))
+        return -ENOENT;
+    if (!(dir_lookup->inode_ptr->mode & S_IFDIR))
+        return -ENOTDIR;
+    if (find_lookupn(__func__, path, path_len, _root_lookup, &lookup))
+        return -EEXIST;
+    struct lookup_t* l1;
+    if (!lookup_create(path, &l1))
+        return -ENOSPC;
+
+    l1->inode_ptr->mode = S_IFDIR | mode;
+
+    printf("[%s]: file created, appending...\n", __func__);
+    if (!lookup_append_lookup_as_child(dir_lookup, l1))
+    {
+        printf("[%s]: appending failed, free file\n", __func__);
+        lookup_free_lookups(l1);
+        return -EIO;
+    }
+    return 0;
+}
+int ramfs_rmdir(const char* path)
+{
+    printf("[%s]: Path: \"%s\"\n", __func__, path);
+    struct lookup_t* lookup       = NULL;
+    struct lookup_t* _root_lookup = get_filesytem_from_fuse_context()->root_lookup;
+    if (lookup != NULL || find_lookup(__func__, path, _root_lookup, &lookup))
+    {
+        if (!(lookup->inode_ptr->mode & S_IFDIR))
+            return -ENOTDIR;
+        if (lookup->child != NULL)
+            return -ENOTEMPTY;
+        if (!lookup_pluck_and_free_lookup(lookup))
+            return -EIO;
+        return 0;
+    }
+    else
+        return -ENOENT;
 }
 
 static int ramfs_link(const char* oldpath, const char* newpath)
@@ -614,6 +671,8 @@ static const struct fuse_operations ramfs_operations = {
     .open     = ramfs_open,
     .read     = ramfs_read,
     .mknod    = ramfs_mknod,
+    .mkdir    = ramfs_mkdir,
+    .rmdir    = ramfs_rmdir,
     .link     = ramfs_link,
     .unlink   = ramfs_unlink,
     .release  = ramfs_release,
